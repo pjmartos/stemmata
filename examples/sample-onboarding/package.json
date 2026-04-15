@@ -1,0 +1,12 @@
+{
+  "name": "@stemmata/sample-onboarding",
+  "version": "0.1.0",
+  "description": "Sample prompt package",
+  "license": "Apache-2.0",
+  "prompts": [
+    { "id": "defaults",   "path": "defaults.yaml",           "contentType": "yaml" },
+    { "id": "database",   "path": "prompts/database.yaml",   "contentType": "yaml" },
+    { "id": "persona",    "path": "prompts/persona.yaml",    "contentType": "yaml" },
+    { "id": "onboarding", "path": "prompts/onboarding.yaml", "contentType": "yaml" }
+  ]
+}

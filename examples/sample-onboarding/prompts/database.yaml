@@ -1,0 +1,11 @@
+ancestors:
+  - "../defaults.yaml"
+
+database:
+  host: "db-prod.internal"
+  ssl: true
+  dsn: "postgres://${database.host}:${database.port}/app"
+
+tags:
+  - "database"
+  - "${vars.region}"

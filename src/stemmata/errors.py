@@ -145,3 +145,65 @@ class GenericError(PromptCliError):
             None,
             {"exception": exception, "traceback": traceback},
         )
+
+
+# Severity ordering for AggregatedError: lower index wins as the headline code.
+# Cycles are most fatal (graph cannot be reasoned about), then schema/manifest
+# problems, then missing references, then merge type conflicts, then placeholder
+# resolution failures, then transport-layer errors, then generic.
+_AGG_PRIORITY = [
+    EXIT_CYCLE,
+    EXIT_SCHEMA,
+    EXIT_REFERENCE,
+    EXIT_MERGE,
+    EXIT_UNRESOLVABLE,
+    EXIT_NETWORK,
+    EXIT_CACHE,
+    EXIT_OFFLINE,
+    EXIT_USAGE,
+    EXIT_GENERIC,
+]
+
+
+def _agg_rank(code: int) -> int:
+    try:
+        return _AGG_PRIORITY.index(code)
+    except ValueError:
+        return len(_AGG_PRIORITY)
+
+
+class AggregatedError(PromptCliError):
+    """Carries a list of underlying errors discovered in a single pass.
+
+    The headline ``code`` is the highest-severity code among the children per
+    ``_AGG_PRIORITY``. The full list is exposed via ``details.errors`` as a
+    list of envelope-shaped dicts so JSON output preserves every diagnostic.
+    """
+
+    def __init__(self, errors: list[PromptCliError], *, command: str = ""):
+        if not errors:
+            raise ValueError("AggregatedError requires at least one error")
+        self.errors = list(errors)
+        ranked = sorted(self.errors, key=lambda e: _agg_rank(e.code))
+        headline = ranked[0]
+        children = [
+            {
+                "code": e.code,
+                "category": CATEGORIES.get(e.code, "internal_error"),
+                "message": e.message,
+                "location": e.location,
+                "details": e.details,
+            }
+            for e in self.errors
+        ]
+        message = f"{len(self.errors)} error(s); first: {headline.message}"
+        super().__init__(
+            headline.code,
+            message,
+            headline.location,
+            {
+                "aggregated": True,
+                "count": len(self.errors),
+                "errors": children,
+            },
+        )

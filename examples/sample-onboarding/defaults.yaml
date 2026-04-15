@@ -1,0 +1,11 @@
+vars:
+  region: "eu-west-1"
+  agent_name: "Iris"
+  timeout_seconds: 30
+database:
+  host: "db-base.internal"
+  port: 5432
+  ssl: false
+tags:
+  - "default"
+  - "stemmata"

@@ -72,6 +72,19 @@ def _build_parser() -> argparse.ArgumentParser:
     cache_cmd = subs.add_parser("cache")
     cache_subs = cache_cmd.add_subparsers(dest="cache_cmd")
     cache_subs.add_parser("clear")
+
+    publish_cmd = subs.add_parser("publish")
+    publish_cmd.add_argument("path", nargs="?", default=".")
+    publish_cmd.add_argument("--dry-run", action="store_true", default=False)
+    publish_cmd.add_argument("--strict-schema", action="store_true", default=False)
+    publish_cmd.add_argument("--tarball", default=None,
+                             help="write the built tarball to this path (implies --dry-run unless combined with upload)")
+    publish_cmd.add_argument("--max-prompts", type=int, default=1000)
+    publish_cmd.add_argument("--max-depth", type=int, default=50)
+    publish_cmd.add_argument("--max-download-size", type=int, default=64 * 1024 * 1024)
+    publish_cmd.add_argument("--max-total-size", type=int, default=512 * 1024 * 1024)
+    publish_cmd.add_argument("--http-timeout", default="30s")
+    publish_cmd.add_argument("--timeout", default="5m")
     return parser
 
 
@@ -165,6 +178,80 @@ def _run_resolve(args: argparse.Namespace, stdout, stderr) -> int:
     return 0
 
 
+def _run_publish(args: argparse.Namespace, stdout, stderr) -> int:
+    from stemmata.publish import PublishOptions, run_publish
+
+    package_root = Path(args.path).resolve()
+    if not package_root.is_dir():
+        raise UsageError(
+            f"publish target {args.path!r} is not a directory",
+            argument="path",
+            reason="not_a_directory",
+        )
+    cache_root = Path(args.cache_dir) if args.cache_dir else default_cache_dir()
+    npmrc_path = Path(args.npmrc) if args.npmrc else None
+    config = load_npmrc(npmrc_path)
+    http_timeout = _parse_duration(args.http_timeout)
+    overall_timeout = _parse_duration(args.timeout)
+
+    tarball_out = Path(args.tarball) if args.tarball else None
+    opts = PublishOptions(
+        package_root=package_root,
+        dry_run=bool(args.dry_run),
+        strict_schema=bool(args.strict_schema),
+        tarball_out=tarball_out,
+        config=config,
+        offline=bool(args.offline),
+        refresh=bool(args.refresh),
+        http_timeout=http_timeout,
+        cache_root=cache_root,
+        max_prompts=args.max_prompts,
+        max_depth=args.max_depth,
+        max_download_bytes=args.max_download_size,
+        max_total_bytes=args.max_total_size,
+        verbose=bool(getattr(args, "verbose", False)),
+        stderr=stderr,
+    )
+
+    deadline_handler_installed = False
+    if overall_timeout > 0 and hasattr(signal, "SIGALRM"):
+        def _timeout(_signum, _frame):
+            raise TimeoutError("overall wall-clock timeout exceeded")
+        signal.signal(signal.SIGALRM, _timeout)
+        signal.setitimer(signal.ITIMER_REAL, overall_timeout)
+        deadline_handler_installed = True
+    try:
+        result = run_publish(opts)
+    finally:
+        if deadline_handler_installed:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+
+    payload = {
+        "name": result.name,
+        "version": result.version,
+        "tarball_path": result.tarball_path,
+        "tarball_size": result.tarball_size,
+        "integrity": result.integrity,
+        "shasum": result.shasum,
+        "uploaded": result.uploaded,
+        "registry_url": result.registry_url,
+        "prompts_checked": result.prompts_checked,
+    }
+    env = success("publish", payload)
+    out_mode = args.output or "json"
+    if out_mode == "yaml":
+        raise UsageError(
+            "'publish' does not produce YAML output; use --output json or --output text",
+            argument="--output",
+            reason="yaml_not_supported",
+        )
+    if out_mode == "text":
+        stdout.write(to_text(env))
+    else:
+        stdout.write(to_json(env))
+    return 0
+
+
 def _run_cache_clear(args: argparse.Namespace, stdout, stderr) -> int:
     if args.output == "yaml":
         raise UsageError(
@@ -201,8 +288,10 @@ def run(argv: list[str] | None = None, *, stdout=None, stderr=None) -> int:
             return _run_resolve(args, stdout, stderr)
         if args.cmd == "cache" and args.cache_cmd == "clear":
             return _run_cache_clear(args, stdout, stderr)
+        if args.cmd == "publish":
+            return _run_publish(args, stdout, stderr)
         raise UsageError(
-            "no subcommand provided (try 'resolve' or 'cache clear')",
+            "no subcommand provided (try 'resolve', 'publish', or 'cache clear')",
             argument="<subcommand>",
             reason="missing_subcommand",
         )
@@ -211,6 +300,8 @@ def run(argv: list[str] | None = None, *, stdout=None, stderr=None) -> int:
             command_name = "cache.clear"
         elif args.cmd == "resolve":
             command_name = "resolve"
+        elif args.cmd == "publish":
+            command_name = "publish"
         env = failure(command_name, err)
         stdout.write(to_json(env))
         if stderr is not None:

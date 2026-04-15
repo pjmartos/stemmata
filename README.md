@@ -75,6 +75,14 @@ Resource limits: `--max-prompts` (default 1000), `--max-depth` (default 50), `--
 
 On success, stdout carries the resolved YAML (or a JSON envelope with `{root, content, ancestors[]}`). On failure, stdout carries a JSON error envelope regardless of `--output`, and stderr gets a one-line human-readable summary.
 
+### `publish [path]`
+
+Builds and uploads the package at `path` (default `.`) to the registry routed by `~/.npmrc`. Before any bytes leave the machine, every prompt listed in `package.json` is checked for: (1) ancestor cycles, (2) intra-document type conflicts, (3) placeholder resolvability against the fully resolved namespace, (4) `dependencies` consistency with the cross-package references found in the prompts, (5) manifest closure under relative-path references — every local `ancestors` entry must resolve to a path that is itself declared in `prompts`, since only manifest-listed files are bundled, and (6) `$schema` validation against the prompt's content contract. All errors discovered in the pass are aggregated into a single envelope; the headline exit code is the most severe one (cycle > schema > reference > merge > placeholder).
+
+Flags: `--dry-run` (build the tarball but skip upload), `--strict-schema` (treat unfetchable / unvalidated `$schema` as an error rather than a warning), `--tarball <path>` (write the built tarball to `path`). The tarball is deterministic: identical inputs produce byte-identical output.
+
+`$schema` enforcement requires `pip install stemmata[publish]` (adds `jsonschema`). Without it, `publish` warns and skips schema validation in default mode, or errors in `--strict-schema` mode.
+
 ### `cache clear`
 
 Evicts every cached entry.
@@ -156,7 +164,7 @@ On failure, stdout always carries a JSON error envelope with `{status, exit_code
 
 ## Configuration
 
-Registry routing and credentials come from `~/.npmrc`.
+Registry routing and credentials come from `~/.npmrc` for both fetch and publish.
 
 ## Testing
 

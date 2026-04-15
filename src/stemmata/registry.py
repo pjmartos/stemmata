@@ -58,6 +58,35 @@ class RegistryClient:
         except TimeoutError:
             raise NetworkError(url, None, "request timed out")
 
+    def _put_json(self, url: str, body: bytes, *, headers: dict[str, str] | None = None) -> bytes:
+        if self.offline:
+            raise OfflineError(url)
+        req_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+        }
+        req_headers.update(self._auth_headers(url))
+        if headers:
+            req_headers.update(headers)
+        req = urllib.request.Request(url, data=body, method="PUT", headers=req_headers)
+        try:
+            with self._opener().open(req, timeout=self.http_timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            try:
+                payload = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                payload = ""
+            reason = f"HTTP {e.code}: {e.reason}"
+            if payload:
+                reason = f"{reason} ({payload[:300]})"
+            raise NetworkError(url, e.code, reason)
+        except urllib.error.URLError as e:
+            raise NetworkError(url, None, str(e.reason))
+        except TimeoutError:
+            raise NetworkError(url, None, "request timed out")
+
     def registry_for_package(self, name: str) -> str:
         scope = name.split("/", 1)[0] if name.startswith("@") else ""
         reg = self.config.registry_for_scope(scope)
@@ -117,6 +146,59 @@ class RegistryClient:
                     None,
                     f"shasum check failed: expected {shasum}, got {actual_sha1}",
                 )
+
+    def publish_tarball(
+        self,
+        name: str,
+        version: str,
+        tarball: bytes,
+        *,
+        manifest: dict[str, Any],
+    ) -> tuple[str, bytes]:
+        """PUT an npm publish envelope to the registry.
+
+        ``manifest`` is the contents of ``package.json`` (already validated).
+        Returns the (url, response_body) tuple. Raises ``NetworkError`` on
+        non-2xx responses or transport failures.
+        """
+        import base64
+
+        registry = self.registry_for_package(name)
+        scope, simple = _split_name(name)
+        filename = f"{simple}-{version}.tgz"
+        tarball_url = f"{registry}{name}/-/{filename}"
+        integrity = "sha512-" + base64.b64encode(hashlib.sha512(tarball).digest()).decode("ascii")
+        shasum = hashlib.sha1(tarball).hexdigest()
+
+        version_meta: dict[str, Any] = dict(manifest)
+        version_meta["name"] = name
+        version_meta["version"] = version
+        version_meta["_id"] = f"{name}@{version}"
+        version_meta["dist"] = {
+            "shasum": shasum,
+            "integrity": integrity,
+            "tarball": tarball_url,
+        }
+
+        envelope = {
+            "_id": name,
+            "name": name,
+            "description": manifest.get("description", ""),
+            "dist-tags": {"latest": version},
+            "versions": {version: version_meta},
+            "_attachments": {
+                filename: {
+                    "content_type": "application/octet-stream",
+                    "data": base64.b64encode(tarball).decode("ascii"),
+                    "length": len(tarball),
+                }
+            },
+        }
+
+        body = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
+        url = f"{registry}{urllib.parse.quote(name, safe='@/')}"
+        response = self._put_json(url, body)
+        return url, response
 
     def fetch_metadata(self, name: str) -> dict[str, Any]:
         registry = self.registry_for_package(name)

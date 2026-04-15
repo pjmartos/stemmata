@@ -1,0 +1,20 @@
+ancestors:
+  - "./database.yaml"
+  - "./persona.yaml"
+
+vars:
+  region: "us-east-1"
+
+# Final ordered tag list, exercising:
+#   - splat:    `${tags}`        splices the inherited list in place
+#   - non-splat `${=capabilities}` inserts the list as a single nested element
+manifest:
+  ordering:
+    - "head"
+    - ${tags}
+    - ${=capabilities}
+    - "tail"
+
+body: |
+  ${persona.greeting}
+  Connecting to ${database.dsn} (ssl=${database.ssl}, timeout=${vars.timeout_seconds}s).

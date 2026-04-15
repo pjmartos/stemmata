@@ -1,0 +1,11 @@
+ancestors:
+  - "../defaults.yaml"
+
+persona:
+  name: "${vars.agent_name}"
+  greeting: "Hello, I am ${vars.agent_name}, operating from ${vars.region}."
+
+capabilities:
+  - "read"
+  - "write"
+  - "review"
