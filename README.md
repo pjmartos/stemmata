@@ -1,5 +1,6 @@
 # stemmata
 
+[![CI](https://github.com/pjmartos/stemmata/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/pjmartos/stemmata/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/stemmata)](https://pypi.org/project/stemmata/)
 [![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
