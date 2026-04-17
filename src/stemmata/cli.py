@@ -13,7 +13,7 @@ import yaml
 
 from stemmata import __version__
 from stemmata.cache import Cache, default_cache_dir
-from stemmata.envelope import failure, success, to_json, to_text
+from stemmata.envelope import failure, success, to_json, to_text, to_yaml
 from stemmata.errors import (
     EXIT_GENERIC,
     EXIT_USAGE,
@@ -238,36 +238,29 @@ def _run_publish(args: argparse.Namespace, stdout, stderr) -> int:
         "prompts_checked": result.prompts_checked,
     }
     env = success("publish", payload)
-    out_mode = args.output or "json"
-    if out_mode == "yaml":
-        raise UsageError(
-            "'publish' does not produce YAML output; use --output json or --output text",
-            argument="--output",
-            reason="yaml_not_supported",
-        )
+    out_mode = args.output or "yaml"
     if out_mode == "text":
         stdout.write(to_text(env))
-    else:
+    elif out_mode == "json":
         stdout.write(to_json(env))
+    else:
+        stdout.write(to_yaml(env))
     return 0
 
 
 def _run_cache_clear(args: argparse.Namespace, stdout, stderr) -> int:
-    if args.output == "yaml":
-        raise UsageError(
-            "'cache clear' does not produce YAML output; use --output json or --output text",
-            argument="--output",
-            reason="yaml_not_supported",
-        )
     cache_root = Path(args.cache_dir) if args.cache_dir else default_cache_dir()
     cache = Cache(root=cache_root)
     removed, freed = cache.clear_all()
     payload = {"entries_removed": removed, "bytes_freed": freed}
     env = success("cache.clear", payload)
-    if args.output == "text":
+    out_mode = args.output or "yaml"
+    if out_mode == "text":
         stdout.write(to_text(env))
-    else:
+    elif out_mode == "json":
         stdout.write(to_json(env))
+    else:
+        stdout.write(to_yaml(env))
     return 0
 
 

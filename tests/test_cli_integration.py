@@ -261,7 +261,7 @@ def test_resolve_offline_violation(tmp_path, npmrc):
 
 def test_cache_clear_empty(tmp_path):
     cap = _Capture()
-    code = run(["--cache-dir", str(tmp_path / "cache"), "cache", "clear"], stdout=cap.out, stderr=cap.err)
+    code = run(["--cache-dir", str(tmp_path / "cache"), "--output", "json", "cache", "clear"], stdout=cap.out, stderr=cap.err)
     assert code == EXIT_OK
     env = json.loads(cap.out.getvalue())
     assert env["result"]["entries_removed"] == 0
@@ -273,7 +273,7 @@ def test_cache_clear_after_install(tmp_path):
     manifest = {"name": "@a/b", "version": "1.0.0", "prompts": [{"path": "prompts/x.yaml"}]}
     cache.install_tarball("@a/b", "1.0.0", _pack(manifest, {"prompts/x.yaml": b"foo: 1\n"}))
     cap = _Capture()
-    code = run(["--cache-dir", str(tmp_path / "cache"), "cache", "clear"], stdout=cap.out, stderr=cap.err)
+    code = run(["--cache-dir", str(tmp_path / "cache"), "--output", "json", "cache", "clear"], stdout=cap.out, stderr=cap.err)
     assert code == EXIT_OK
     env = json.loads(cap.out.getvalue())
     assert env["result"]["entries_removed"] == 1

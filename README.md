@@ -62,7 +62,7 @@ stemmata [GLOBAL FLAGS] <subcommand> [ARGS]
 
 | Flag                        | Default        | Description                                                       |
 |-----------------------------|----------------|-------------------------------------------------------------------|
-| `--output {yaml,json,text}` | per-subcommand | Output format (`yaml` for `resolve`, `json` for everything else). |
+| `--output {yaml,json,text}` | `yaml`         | Output format (`yaml` for all subcommands by default).            |
 | `--verbose`                 | off            | Timestamped diagnostics on stderr.                                |
 | `--offline`                 | off            | Forbid network access; exit `22` if a fetch would be needed.      |
 | `--refresh`                 | off            | Re-fetch artifacts even if cached.                                |

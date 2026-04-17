@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import yaml
+
 from stemmata.errors import CATEGORIES, PromptCliError
 
 
@@ -30,6 +32,16 @@ def failure(command: str, err: PromptCliError) -> dict[str, Any]:
             "details": err.details,
         },
     }
+
+
+def to_yaml(envelope: dict[str, Any]) -> str:
+    return yaml.dump(
+        envelope,
+        Dumper=yaml.SafeDumper,
+        default_flow_style=False,
+        sort_keys=False,
+        allow_unicode=True,
+    )
 
 
 def to_json(envelope: dict[str, Any]) -> str:
