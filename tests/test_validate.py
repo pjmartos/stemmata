@@ -168,6 +168,83 @@ class TestJson:
         assert code == EXIT_SCHEMA
 
 
+# -- JSON prompts with ancestors ---------------------------------------------
+
+class TestJsonAncestors:
+    def test_inherited_values_satisfy_schema(self, tmp_path):
+        uri = _schema(tmp_path, props={"name": {"type": "string"}, "region": {"type": "string"}},
+                       required=["name", "region"])
+        _write(tmp_path / "base.yaml", "region: us-east-1\n")
+        _write(tmp_path / "child.json",
+               json.dumps({"$schema": uri, "ancestors": ["./base.yaml"], "name": "hello"}))
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "child.json")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+
+    def test_json_inherits_from_json(self, tmp_path):
+        uri = _schema(tmp_path, props={"name": {"type": "string"}, "region": {"type": "string"}},
+                       required=["name", "region"])
+        _write(tmp_path / "base.json", json.dumps({"region": "us-east-1"}))
+        _write(tmp_path / "child.json",
+               json.dumps({"$schema": uri, "ancestors": ["./base.json"], "name": "hello"}))
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "child.json")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+
+    def test_inherited_value_type_mismatch(self, tmp_path):
+        uri = _schema(tmp_path, props={"region": {"type": "integer"}})
+        _write(tmp_path / "base.json", json.dumps({"region": "us-east-1"}))
+        _write(tmp_path / "child.json",
+               json.dumps({"$schema": uri, "ancestors": ["./base.json"]}))
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "child.json")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+
+
+# -- JSON line numbers --------------------------------------------------------
+
+class TestJsonLineNumbers:
+    def test_json_string_value_line(self, tmp_path):
+        uri = _schema(tmp_path, props={"name": {"type": "integer"}})
+        content = json.dumps({"$schema": uri, "ignored": True, "name": "hello"}, indent=2)
+        _write(tmp_path / "a.json", content)
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.json")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+        loc = json.loads(cap.out.getvalue())["error"]["details"]["errors"][0]["location"]
+        assert loc["line"] is not None
+        assert loc["line"] >= 1
+
+
+# -- JSON resolve (via CLI) --------------------------------------------------
+
+class TestJsonResolve:
+    def test_resolve_json_prompt(self, tmp_path):
+        _write(tmp_path / "a.json", json.dumps({"greeting": "hello"}))
+        cap = _Capture()
+        code = run(["--output", "json", "resolve", str(tmp_path / "a.json")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+        result = json.loads(cap.out.getvalue())
+        assert result["result"]["content"]["greeting"] == "hello"
+
+    def test_resolve_json_with_yaml_ancestor(self, tmp_path):
+        _write(tmp_path / "base.yaml", "region: us-east-1\n")
+        _write(tmp_path / "child.json",
+               json.dumps({"ancestors": ["./base.yaml"], "name": "hello"}))
+        cap = _Capture()
+        code = run(["--output", "json", "resolve", str(tmp_path / "child.json")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+        content = json.loads(cap.out.getvalue())["result"]["content"]
+        assert content["name"] == "hello"
+        assert content["region"] == "us-east-1"
+
+
 # -- directory scanning ------------------------------------------------------
 
 class TestDirectory:

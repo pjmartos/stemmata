@@ -157,3 +157,76 @@ def test_intra_doc_conflict_nested_scope_reports_full_path():
 def test_plain_key_unchanged():
     doc = parse_prompt("simple: value\n", file="x.yaml")
     assert doc.namespace == {"simple": "value"}
+
+
+# -- JSON prompt parsing -------------------------------------------------------
+
+
+def test_json_empty_prompt():
+    doc = parse_prompt("{}", file="x.json")
+    assert doc.ancestors == []
+    assert doc.namespace == {}
+
+
+def test_json_plain_content():
+    import json
+    doc = parse_prompt(json.dumps({"foo": "bar"}), file="x.json")
+    assert doc.namespace == {"foo": "bar"}
+    assert doc.ancestors == []
+
+
+def test_json_reserved_keys_stripped():
+    import json
+    text = json.dumps({
+        "ancestors": ["./base.json"],
+        "$schema": "https://example/s.json",
+        "foo": "bar",
+    })
+    doc = parse_prompt(text, file="x.json", validate_paths=False)
+    assert "ancestors" not in doc.namespace
+    assert "$schema" not in doc.namespace
+    assert doc.namespace == {"foo": "bar"}
+    assert doc.schema_uri == "https://example/s.json"
+
+
+def test_json_relative_ancestor_ref():
+    import json
+    text = json.dumps({"ancestors": ["../base.json"]})
+    doc = parse_prompt(text, file="x.json", validate_paths=False)
+    assert isinstance(doc.ancestors[0], PathRef)
+    assert doc.ancestors[0].raw == "../base.json"
+
+
+def test_json_coord_ancestor_ref():
+    import json
+    text = json.dumps({
+        "ancestors": [{"package": "@acme/core", "version": "1.2.3", "prompt": "base"}],
+    })
+    doc = parse_prompt(text, file="x.json")
+    ref = doc.ancestors[0]
+    assert isinstance(ref, CoordRef)
+    assert ref.package == "@acme/core"
+    assert ref.version == "1.2.3"
+    assert ref.prompt == "base"
+
+
+def test_json_root_must_be_mapping():
+    with pytest.raises(SchemaError):
+        parse_prompt("[1, 2, 3]", file="x.json")
+
+
+def test_json_dotted_key_expanded():
+    import json
+    doc = parse_prompt(json.dumps({"vars.region": "Cartama"}), file="x.json")
+    assert doc.namespace == {"vars": {"region": "Cartama"}}
+
+
+def test_json_empty_input():
+    doc = parse_prompt("", file="x.json")
+    assert doc.ancestors == []
+    assert doc.namespace == {}
+
+
+def test_json_malformed():
+    with pytest.raises(SchemaError):
+        parse_prompt("{bad", file="x.json")

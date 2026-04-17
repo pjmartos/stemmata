@@ -1,7 +1,6 @@
 """``stemmata validate`` — schema validation for prompt files."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +18,6 @@ from stemmata.resolver import (
 )
 from stemmata.schema_check import (
     SchemaCheckOptions,
-    _json_key_line,
     resolve_schema_uri,
     validate_against_schema,
 )
@@ -156,37 +154,42 @@ def _validate_yaml_file(
 
 def _validate_json_file(
     path: Path,
+    session_factory,    # () -> Session
     schema_opts: SchemaCheckOptions,
 ) -> tuple[int, list[PromptCliError]]:
     """Returns ``(documents_checked, errors)``."""
     file_str = str(path)
     try:
         text = path.read_text(encoding="utf-8")
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        return 1, [SchemaError(f"JSON parse error in {file_str}: {e.msg}",
-                               file=file_str, line=e.lineno, column=e.colno,
-                               field_name="<json>", reason="json_parse_error")]
     except OSError as e:
         return 0, [SchemaError(f"cannot read {file_str}: {e}",
                                file=file_str, field_name="<io>", reason="io_error")]
 
-    if not isinstance(data, dict):
-        return 1, []
-    raw_uri = data.get("$schema")
+    try:
+        doc = parse_prompt(text, file=file_str, strict=False, validate_paths=False)
+    except PromptCliError as e:
+        return 1, [e]
+
+    raw_uri = doc.data.get("$schema")
     if not raw_uri or not isinstance(raw_uri, str):
         return 1, []
     schema_uri = resolve_schema_uri(raw_uri, file_str)
 
-    instance = {k: v for k, v in data.items() if k != "$schema"}
-    errors = validate_against_schema(instance, schema_uri, file=file_str, opts=schema_opts)
-    for err in errors:
-        if isinstance(err.location, dict) and err.location.get("line") is None:
-            field = err.details.get("field", "")
-            if field and field != "<root>":
-                line = _json_key_line(text, field)
-                if line is not None:
-                    err.location["line"] = line
+    errors: list[PromptCliError] = []
+    if doc.ancestors:
+        try:
+            graph = resolve_graph(file_str, session_factory())
+            resolved, position_ns = _resolve_pipeline(graph)
+        except PromptCliError as e:
+            return 1, [e]
+    else:
+        resolved = doc.namespace
+        position_ns = doc.namespace
+
+    errors.extend(validate_against_schema(
+        resolved, schema_uri, file=file_str, opts=schema_opts,
+        position_instance=position_ns,
+    ))
     return 1, errors
 
 
@@ -216,7 +219,7 @@ def run_validate(
         if ext in (".yaml", ".yml"):
             docs, errs = _validate_yaml_file(fpath, session_factory, schema_opts)
         elif ext == ".json":
-            docs, errs = _validate_json_file(fpath, schema_opts)
+            docs, errs = _validate_json_file(fpath, session_factory, schema_opts)
         else:
             continue
         total_files += 1

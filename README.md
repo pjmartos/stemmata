@@ -106,7 +106,7 @@ Evicts every cached entry.
 
 ## Prompt Format
 
-A prompt is a structured mapping (only YAML is supported as of now) with reserved envelope keys plus arbitrary content:
+A prompt is a structured mapping (YAML or JSON) with reserved envelope keys plus arbitrary content:
 
 ```yaml
 ancestors:

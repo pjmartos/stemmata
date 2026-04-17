@@ -135,11 +135,21 @@ def test_dependencies_validation():
     assert m.dependencies == {"@foo/bar": "2.0.0"}
 
 
-def test_content_type_must_be_yaml():
+def test_content_type_json_accepted():
     raw = json.dumps({
         "name": "@a/b",
         "version": "1.0.0",
-        "prompts": [{"id": "a", "path": "prompts/a.yaml", "contentType": "json"}],
+        "prompts": [{"id": "a", "path": "prompts/a.json", "contentType": "json"}],
+    })
+    m = parse_manifest(raw)
+    assert m.prompts[0].contentType == "json"
+
+
+def test_content_type_invalid_rejected():
+    raw = json.dumps({
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [{"id": "a", "path": "prompts/a.xml", "contentType": "xml"}],
     })
     with pytest.raises(SchemaError):
         parse_manifest(raw)

@@ -254,9 +254,9 @@ def validate_manifest(data: dict[str, Any], *, file: str = "package.json") -> Ma
         seen_ids.add(pid)
 
         content_type = entry.get("contentType", "yaml")
-        if content_type != "yaml":
+        if content_type not in ("yaml", "json"):
             raise SchemaError(
-                f"prompt entry path={path!r} has contentType {content_type!r}; must be 'yaml' in v1",
+                f"prompt entry path={path!r} has contentType {content_type!r}; must be 'yaml' or 'json'",
                 file=file,
                 field_name=f"prompts[path={path!r}].contentType",
                 reason="invalid_content_type",

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from stemmata.errors import SchemaError
+from stemmata.json_loader import load_json_with_positions
 from stemmata.manifest import is_scoped_name, is_semver
 from stemmata.yaml_loader import load_with_positions
 
@@ -144,13 +145,21 @@ def _validate_rel_path(raw: str, *, file: str, line: int | None, column: int | N
             depth += 1
 
 
+def _is_json_file(file: str) -> bool:
+    return file.lower().endswith(".json")
+
+
 def parse_prompt(text: str, *, file: str, strict: bool = True, validate_paths: bool = True) -> PromptDocument:
-    data, _positions = load_with_positions(text, file=file, strict=strict)
+    if _is_json_file(file):
+        data, _positions = load_json_with_positions(text, file=file)
+    else:
+        data, _positions = load_with_positions(text, file=file, strict=strict)
     if data is None:
         data = {}
     if not isinstance(data, dict):
+        fmt = "JSON" if _is_json_file(file) else "YAML"
         raise SchemaError(
-            f"prompt {file} must be a YAML mapping at the top level",
+            f"prompt {file} must be a {fmt} mapping at the top level",
             file=file,
             field_name="<root>",
             reason="not_mapping",
