@@ -49,6 +49,10 @@ stemmata resolve '@acme/prompts-core@1.2.3#onboarding'
 stemmata describe '@acme/prompts-core@1.2.3'
 stemmata describe '@acme/prompts-core@1.2.3#onboarding'
 
+# Print the ancestor DAG as an ASCII tree:
+stemmata tree ./prompts/onboarding.yaml
+stemmata tree '@acme/prompts-core@1.2.3#onboarding'
+
 # Need machine-readable output for a script or pipeline:
 stemmata --output json resolve ./prompts/onboarding.yaml
 
@@ -68,13 +72,13 @@ stemmata [GLOBAL FLAGS] <subcommand> [ARGS]
 
 ### Global flags
 
-| Flag                        | Default        | Description                                                       |
-|-----------------------------|----------------|-------------------------------------------------------------------|
-| `--output {yaml,json,text}` | `yaml`         | Output format (`yaml` for all subcommands by default).            |
-| `--verbose`                 | off            | Timestamped diagnostics on stderr.                                |
-| `--offline`                 | off            | Forbid network access; exit `22` if a fetch would be needed.      |
-| `--refresh`                 | off            | Re-fetch artifacts even if cached.                                |
-| `--version`                 | —              | Print version and exit.                                           |
+| Flag                        | Default                    | Description                                                  |
+|-----------------------------|----------------------------|--------------------------------------------------------------|
+| `--output {yaml,json,text}` | `yaml` (`text` for `tree`) | Output format.                                               |
+| `--verbose`                 | off                        | Timestamped diagnostics on stderr.                           |
+| `--offline`                 | off                        | Forbid network access; exit `22` if a fetch would be needed. |
+| `--refresh`                 | off                        | Re-fetch artifacts even if cached.                           |
+| `--version`                 | —                          | Print version and exit.                                      |
 
 ### `resolve <target>`
 
@@ -111,6 +115,22 @@ Resolves every prompt in a published package, or a single prompt inside it. Targ
 Default YAML output emits one document per prompt, separated by `---` start markers. Each sub-document is prefixed with a `# <canonical-id>` comment (e.g. `# @acme/prompts-core@1.2.3#onboarding`) so the reader can tell which prompt is which. `--output json` returns an array of `{root, content, ancestors[]}` entries in manifest declaration order (length 1 when targeting a single prompt). Package artifacts are fetched through the usual cache (`~/.cache/stemmata` by default), so repeated invocations reuse downloaded tarballs; `--offline` and `--refresh` behave as with `resolve`.
 
 Resource-limit flags match `resolve`.
+
+### `tree <target>`
+
+Prints the ancestor DAG rooted at `<target>`, which takes the same two forms as `resolve` (a local YAML/JSON path or a `@<scope>/<name>@<version>#<prompt-id>` coordinate). The resolver runs the same eager pipeline as `resolve`, so cycles, missing ancestors, and version conflicts surface with the usual exit codes; `--offline` / `--refresh` and the resource-limit flags all apply.
+
+Default `--output text` produces an ASCII tree (`|-- ` / `` `-- `` connectors). Diamond inheritance is rendered once in full and subsequent visits are marked `(seen)` so the output stays finite:
+
+```
+root.yaml
+|-- a.yaml
+|   `-- x.yaml
+`-- b.yaml
+    `-- x.yaml  (seen)
+```
+
+`--output yaml` / `--output json` emit a `{root, nodes[], edges[]}` envelope instead, with each node carrying its canonical id, source file, and BFS distance from the root.
 
 ### `cache clear`
 

@@ -424,6 +424,97 @@ def test_diamond_bfs_order_integration(tmp_path):
     assert env["result"]["content"]["body"] == "red/square"
 
 
+def test_tree_missing_target_usage_error(tmp_path):
+    cap = _Capture()
+    code = run(["tree"], stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_USAGE
+
+
+def test_tree_local_text_output(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text("vars:\n  x: 1\n")
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\nbody: ${vars.x}\n")
+    cap = _Capture()
+    code = run(["--cache-dir", str(tmp_path / "cache"), "tree", str(child)], stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    out = cap.out.getvalue()
+    child_real = str(child.resolve())
+    base_real = str(base.resolve())
+    assert out.startswith("\n")
+    lines = out.splitlines()
+    assert lines[0] == ""
+    assert lines[1] == child_real
+    assert any(base_real in line and "`-- " in line for line in lines[2:])
+
+
+def test_tree_diamond_marks_revisit(tmp_path):
+    x = tmp_path / "x.yaml"
+    x.write_text("color: red\n")
+    a = tmp_path / "a.yaml"
+    a.write_text("ancestors:\n  - ./x.yaml\nshape: square\n")
+    b = tmp_path / "b.yaml"
+    b.write_text("ancestors:\n  - ./x.yaml\nshape: circle\n")
+    root = tmp_path / "root.yaml"
+    root.write_text("ancestors:\n  - ./a.yaml\n  - ./b.yaml\nbody: ok\n")
+    cap = _Capture()
+    code = run(["--cache-dir", str(tmp_path / "cache"), "tree", str(root)], stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    out = cap.out.getvalue()
+    assert out.count("(seen)") == 1
+
+
+def test_tree_json_envelope(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text("vars:\n  x: 1\n")
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\nbody: ${vars.x}\n")
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"), "tree", str(child)], stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK
+    env = json.loads(cap.out.getvalue())
+    assert env["command"] == "tree"
+    assert env["result"]["root"] == str(child.resolve())
+    ids = [n["id"] for n in env["result"]["nodes"]]
+    assert str(child.resolve()) in ids
+    assert str(base.resolve()) in ids
+    assert any(e["from"] == str(child.resolve()) and e["to"] == str(base.resolve()) for e in env["result"]["edges"])
+
+
+def test_tree_registry_coord(tmp_path, npmrc):
+    manifest = {
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [
+            {"id": "base", "path": "prompts/base.yaml"},
+            {"id": "child", "path": "prompts/child.yaml"},
+        ],
+    }
+    files = {
+        "prompts/base.yaml": b"vars:\n  x: 1\n",
+        "prompts/child.yaml": b"ancestors:\n  - ./base.yaml\nbody: ${vars.x}\n",
+    }
+    tarballs = {("@a/b", "1.0.0"): _pack(manifest, files)}
+    server = _RegistryServer(tarballs)
+    server.start()
+    try:
+        rc = npmrc({"@a:registry": server.url})
+        cap = _Capture()
+        code = run([
+            "--npmrc", str(rc),
+            "--cache-dir", str(tmp_path / "cache"),
+            "tree", "@a/b@1.0.0#child",
+        ], stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+        out = cap.out.getvalue()
+        assert out.startswith("\n")
+        lines = out.splitlines()
+        assert lines[1] == "@a/b@1.0.0#child"
+        assert any("@a/b@1.0.0#base" in line for line in lines[2:])
+    finally:
+        server.stop()
+
+
 def test_describe_missing_target_usage_error(tmp_path):
     cap = _Capture()
     code = run(["describe"], stdout=cap.out, stderr=cap.err)

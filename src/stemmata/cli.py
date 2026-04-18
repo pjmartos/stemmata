@@ -85,6 +85,15 @@ def _build_parser() -> argparse.ArgumentParser:
     validate_cmd.add_argument("--http-timeout", default="30s")
     validate_cmd.add_argument("--timeout", default="5m")
 
+    tree_cmd = subs.add_parser("tree")
+    tree_cmd.add_argument("target", nargs="?")
+    tree_cmd.add_argument("--max-prompts", type=int, default=1000)
+    tree_cmd.add_argument("--max-depth", type=int, default=50)
+    tree_cmd.add_argument("--max-download-size", type=int, default=64 * 1024 * 1024)
+    tree_cmd.add_argument("--max-total-size", type=int, default=512 * 1024 * 1024)
+    tree_cmd.add_argument("--http-timeout", default="30s")
+    tree_cmd.add_argument("--timeout", default="5m")
+
     describe_cmd = subs.add_parser("describe")
     describe_cmd.add_argument("target", nargs="?")
     describe_cmd.add_argument("--max-prompts", type=int, default=1000)
@@ -254,6 +263,94 @@ def _run_resolve(args: argparse.Namespace, stdout, stderr) -> int:
         stdout.write(to_json(env))
     else:
         stdout.write(to_text(env))
+    return 0
+
+
+def _render_tree(graph) -> str:
+    lines: list[str] = ["\n", graph.root_id.canonical + "\n"]
+    visited: set = {graph.root_id}
+
+    def walk(nid, prefix: str, is_last: bool) -> None:
+        connector = "`-- " if is_last else "|-- "
+        revisit = "  (seen)" if nid in visited else ""
+        lines.append(f"{prefix}{connector}{nid.canonical}{revisit}\n")
+        if nid in visited:
+            return
+        visited.add(nid)
+        kids = graph.nodes[nid].children
+        ext = "    " if is_last else "|   "
+        for i, c in enumerate(kids):
+            walk(c, prefix + ext, i == len(kids) - 1)
+
+    root_kids = graph.nodes[graph.root_id].children
+    for i, c in enumerate(root_kids):
+        walk(c, "", i == len(root_kids) - 1)
+    return "".join(lines)
+
+
+def _run_tree(args: argparse.Namespace, stdout, stderr) -> int:
+    if not args.target:
+        raise UsageError("tree requires a target", argument="target", reason="missing")
+    cache_root = Path(args.cache_dir) if args.cache_dir else default_cache_dir()
+    cache = Cache(root=cache_root)
+    npmrc_path = Path(args.npmrc) if args.npmrc else None
+    config = load_npmrc(npmrc_path)
+    http_timeout = _parse_duration(args.http_timeout)
+    overall_timeout = _parse_duration(args.timeout)
+    registry = RegistryClient(config=config, offline=args.offline, http_timeout=http_timeout)
+    session = Session(
+        cache=cache,
+        registry=registry,
+        refresh=args.refresh,
+        max_prompts=args.max_prompts,
+        max_depth=args.max_depth,
+        max_download_bytes=args.max_download_size,
+        max_total_bytes=args.max_total_size,
+        verbose=bool(getattr(args, "verbose", False)),
+        stderr=stderr,
+    )
+
+    deadline_handler_installed = False
+    if overall_timeout > 0 and hasattr(signal, "SIGALRM"):
+        def _timeout(_signum, _frame):
+            raise TimeoutError("overall wall-clock timeout exceeded")
+        signal.signal(signal.SIGALRM, _timeout)
+        signal.setitimer(signal.ITIMER_REAL, overall_timeout)
+        deadline_handler_installed = True
+    try:
+        graph = resolve_graph(args.target, session)
+    finally:
+        if deadline_handler_installed:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+
+    out_mode = args.output or "text"
+    if out_mode == "text":
+        stdout.write(_render_tree(graph))
+        return 0
+
+    nodes_payload = [
+        {
+            "id": nid.canonical,
+            "file": graph.nodes[nid].file,
+            "distance": graph.distances[nid],
+        }
+        for nid in graph.order
+    ]
+    edges_payload = [
+        {"from": nid.canonical, "to": child.canonical}
+        for nid in graph.order
+        for child in graph.nodes[nid].children
+    ]
+    payload = {
+        "root": graph.root_id.canonical,
+        "nodes": nodes_payload,
+        "edges": edges_payload,
+    }
+    env = success("tree", payload)
+    if out_mode == "json":
+        stdout.write(to_json(env))
+    else:
+        stdout.write(to_yaml(env))
     return 0
 
 
@@ -474,8 +571,10 @@ def run(argv: list[str] | None = None, *, stdout=None, stderr=None) -> int:
             return _run_publish(args, stdout, stderr)
         if args.cmd == "describe":
             return _run_describe(args, stdout, stderr)
+        if args.cmd == "tree":
+            return _run_tree(args, stdout, stderr)
         raise UsageError(
-            "no subcommand provided (try 'resolve', 'describe', 'validate', 'publish', or 'cache clear')",
+            "no subcommand provided (try 'resolve', 'describe', 'tree', 'validate', 'publish', or 'cache clear')",
             argument="<subcommand>",
             reason="missing_subcommand",
         )
@@ -490,6 +589,8 @@ def run(argv: list[str] | None = None, *, stdout=None, stderr=None) -> int:
             command_name = "publish"
         elif args.cmd == "describe":
             command_name = "describe"
+        elif args.cmd == "tree":
+            command_name = "tree"
         env = failure(command_name, err)
         stdout.write(to_json(env))
         if stderr is not None:
