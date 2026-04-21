@@ -18,6 +18,18 @@ from stemmata.prompt_doc import (
 from stemmata.resource_resolve import _parse_coordinate_body
 
 
+_BOM_BYTES = b"\xef\xbb\xbf"
+
+
+def _read_normalised(path: Path) -> str:
+    raw = path.read_bytes()
+    if raw.startswith(_BOM_BYTES):
+        raw = raw[len(_BOM_BYTES):]
+    if b"\r" in raw:
+        raw = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return raw.decode("utf-8")
+
+
 @dataclass
 class _ResourceUsage:
     entry: PromptEntry | ResourceEntry
@@ -35,7 +47,7 @@ def _iter_resource_usage(manifest: Manifest, package_root: Path) -> Iterator[_Re
         if not path.is_file():
             continue
         try:
-            doc = parse_prompt(path.read_text(encoding="utf-8"), file=str(path), validate_paths=False)
+            doc = parse_prompt(_read_normalised(path), file=str(path), strict=False, validate_paths=False)
         except SchemaError:
             continue
         for rref in collect_resource_refs(doc.namespace, file_fallback=str(path)):
@@ -65,7 +77,7 @@ def collect_cross_package_refs(manifest: Manifest, package_root: Path) -> set[tu
         if not path.is_file():
             continue
         try:
-            doc = parse_prompt(path.read_text(encoding="utf-8"), file=str(path), validate_paths=False)
+            doc = parse_prompt(_read_normalised(path), file=str(path), strict=False, validate_paths=False)
         except SchemaError:
             continue
         for ref in doc.ancestors:
@@ -178,7 +190,7 @@ def check_local_refs(
         if not prompt_file.is_file():
             continue
         try:
-            doc = parse_prompt(prompt_file.read_text(encoding="utf-8"), file=str(prompt_file), validate_paths=False)
+            doc = parse_prompt(_read_normalised(prompt_file), file=str(prompt_file), strict=False, validate_paths=False)
         except SchemaError:
             continue
         for ref in doc.ancestors:

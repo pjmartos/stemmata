@@ -210,7 +210,7 @@ def build_resource_binding(graph, session) -> ResourceBinding:
                 searched_in=f"{coord.package}@{coord.version}",
                 reason="missing",
             )
-        doc = read_markdown(str(file_path))
+        doc = read_markdown(str(file_path), strict=getattr(session, "strict_parse", True))
         manifest, pkg_root = session.ensure_package(coord.package, coord.version)
         entry = manifest.resource_by_id(coord.resource_id)
         entry_path = entry.path if entry is not None else None

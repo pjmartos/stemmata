@@ -182,6 +182,7 @@ def _check_one_prompt(
         max_total_bytes=opts.max_total_bytes,
         verbose=opts.verbose,
         stderr=opts.stderr,
+        strict_parse=False,
     )
     if publish_package is not None:
         # Pre-register the local package so same-package relative ${resource:...}

@@ -79,6 +79,7 @@ class Session:
     max_total_bytes: int = 512 * 1024 * 1024
     verbose: bool = False
     stderr: Any = None
+    strict_parse: bool = True
     _total_downloaded: int = 0
     _manifest_by_pkg: dict[tuple[str, str], tuple[Manifest, Path]] = field(default_factory=dict)
     _refreshed: set[tuple[str, str]] = field(default_factory=set)
@@ -146,7 +147,21 @@ class ResolvedGraph:
     distances: dict[NodeId, int]
 
 
-def _load_prompt_file(file_path: str) -> PromptDocument:
+_BOM_BYTES = b"\xef\xbb\xbf"
+
+
+def _read_payload_text(file_path: str, *, strict: bool) -> str:
+    if strict:
+        return Path(file_path).read_text(encoding="utf-8")
+    raw = Path(file_path).read_bytes()
+    if raw.startswith(_BOM_BYTES):
+        raw = raw[len(_BOM_BYTES):]
+    if b"\r" in raw:
+        raw = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return raw.decode("utf-8")
+
+
+def _load_prompt_file(file_path: str, *, strict: bool = True) -> PromptDocument:
     p = Path(file_path)
     if not p.exists():
         raise ReferenceError_(
@@ -157,9 +172,9 @@ def _load_prompt_file(file_path: str) -> PromptDocument:
             reference=file_path,
             searched_in=str(p.parent),
         )
-    text = p.read_text(encoding="utf-8")
+    text = _read_payload_text(file_path, strict=strict)
     try:
-        doc = parse_prompt(text, file=file_path, validate_paths=False)
+        doc = parse_prompt(text, file=file_path, strict=strict, validate_paths=False)
     except SchemaError:
         raise
     attach_file(doc.namespace, file_path)
@@ -186,8 +201,8 @@ def _load_registry_prompt(session: Session, pkg: str, version: str, prompt_id: s
             field_name="path",
             reason="missing_prompt_file",
         )
-    text = prompt_file.read_text(encoding="utf-8")
-    doc = parse_prompt(text, file=str(prompt_file))
+    text = _read_payload_text(str(prompt_file), strict=session.strict_parse)
+    doc = parse_prompt(text, file=str(prompt_file), strict=session.strict_parse)
     canonical = f"{pkg}@{version}#{prompt_id}"
     attach_file(doc.namespace, canonical)
     return doc, manifest, pkg_root, canonical
@@ -257,7 +272,7 @@ def _resolve_ancestor_ref(
             doc, manifest, root, canonical = _load_registry_prompt(session, pkg, ver, pid)
             return collapsed, doc, manifest, root, canonical
         real = _canonical_path(target)
-        doc = _load_prompt_file(real)
+        doc = _load_prompt_file(real, strict=session.strict_parse)
         return NodeId.for_file(real), doc, None, None, real
     assert isinstance(ref, CoordRef)
     effective_version = session.version_overrides.get(ref.package, ref.version)
@@ -418,7 +433,7 @@ def _load_root(root_target: str, session: Session) -> tuple[NodeId, Node]:
         nid = NodeId.for_coord(pkg, effective_version, prompt_id)
         return nid, Node(id=nid, doc=doc, file=canonical, manifest=manifest, package_root=pkg_root)
     abs_path = _canonical_path(root_target)
-    doc = _load_prompt_file(abs_path)
+    doc = _load_prompt_file(abs_path, strict=session.strict_parse)
     nid = NodeId.for_file(abs_path)
     return nid, Node(id=nid, doc=doc, file=abs_path)
 

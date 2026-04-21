@@ -202,3 +202,77 @@ def test_unfetchable_local_schema_is_always_error(tmp_path):
         run_publish(_opts(tmp_path))
     reasons = [e["details"].get("reason") for e in ei.value.details["errors"]]
     assert "schema_file_not_found" in reasons
+
+
+def _tar_member(tgz_path, endswith):
+    with tarfile.open(tgz_path, mode="r:gz") as tf:
+        m = next(x for x in tf.getmembers() if x.name.endswith(endswith))
+        return tf.extractfile(m).read()
+
+
+def test_publish_normalises_bom_in_yaml_prompt(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }, {
+        "prompts/base.yaml": b"\xef\xbb\xbfa: 1\nb: 2\n",
+    })
+    result = run_publish(_opts(tmp_path, tarball_out=tmp_path / "out.tgz"))
+    assert result.tarball_size > 0
+    assert _tar_member(tmp_path / "out.tgz", "base.yaml") == b"a: 1\nb: 2\n"
+
+
+def test_publish_normalises_crlf_in_yaml_prompt(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }, {
+        "prompts/base.yaml": b"a: 1\r\nb: 2\r\n",
+    })
+    result = run_publish(_opts(tmp_path, tarball_out=tmp_path / "out.tgz"))
+    assert result.tarball_size > 0
+    assert _tar_member(tmp_path / "out.tgz", "base.yaml") == b"a: 1\nb: 2\n"
+
+
+def test_publish_normalises_bom_and_crlf_together(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }, {
+        "prompts/base.yaml": b"\xef\xbb\xbfa: 1\r\nb: 2\r\n",
+    })
+    result = run_publish(_opts(tmp_path, tarball_out=tmp_path / "out.tgz"))
+    assert result.tarball_size > 0
+    assert _tar_member(tmp_path / "out.tgz", "base.yaml") == b"a: 1\nb: 2\n"
+
+
+def test_publish_normalises_bom_and_crlf_in_markdown_resource(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+        "resources": [{"id": "f", "path": "resources/f.md", "contentType": "markdown"}],
+    }, {
+        "prompts/base.yaml": b'body: "${resource:../resources/f.md}"\n',
+        "resources/f.md": b"\xef\xbb\xbfhello\r\nworld\r\n",
+    })
+    result = run_publish(_opts(tmp_path, tarball_out=tmp_path / "out.tgz"))
+    assert result.tarball_size > 0
+    assert _tar_member(tmp_path / "out.tgz", "f.md") == b"hello\nworld\n"
+
+
+def test_publish_with_bom_crlf_still_runs_placeholder_checks(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }, {
+        "prompts/base.yaml": b'\xef\xbb\xbfbody: "${missing.placeholder}"\r\n',
+    })
+    with pytest.raises(AggregatedError) as ei:
+        run_publish(_opts(tmp_path))
+    codes = [e["code"] for e in ei.value.details["errors"]]
+    assert EXIT_UNRESOLVABLE in codes
