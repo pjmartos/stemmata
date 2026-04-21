@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools==82.0.1"]
+requires = ["setuptools==82.0.1", "setuptools_scm==10.0.5"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "stemmata"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Hierarchical prompt resolver CLI"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -37,6 +37,10 @@ stemmata = "stemmata.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools_scm]
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
