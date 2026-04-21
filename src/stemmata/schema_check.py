@@ -4,12 +4,14 @@ import hashlib
 import json
 import os
 import re
-import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import jsonschema
+from jsonschema import Draft202012Validator
 
 from stemmata.cache import default_cache_dir
 from stemmata.errors import (
@@ -33,18 +35,9 @@ def resolve_schema_uri(schema_uri: str, source_file: str) -> str:
     return os.path.normpath(os.path.join(base, schema_uri))
 
 
-def _have_jsonschema() -> bool:
-    try:
-        import jsonschema  # noqa: F401
-        return True
-    except Exception:
-        return False
-
-
 @dataclass
 class SchemaCheckOptions:
     offline: bool = False
-    strict: bool = False
     refresh: bool = False
     http_timeout: float = 30.0
     cache_root: Path | None = None
@@ -110,11 +103,6 @@ def _fetch_schema(uri: str, opts: SchemaCheckOptions) -> dict[str, Any]:
     return schema
 
 
-def _warn(stderr: Any, message: str) -> None:
-    stream = stderr if stderr is not None else sys.stderr
-    stream.write(f"warning: {message}\n")
-
-
 def _lookup_line(instance: Any, path_parts: list[str | int]) -> int | None:
     """Walk *instance* along *path_parts* and return the source line number.
 
@@ -172,47 +160,28 @@ def validate_against_schema(
     (useful when *instance* has been through interpolation and lost the
     ``_ScalarStr`` wrappers — pass the pre-interpolation tree instead).
     """
-    if not _have_jsonschema():
-        msg = (
-            "jsonschema is not installed; install with `pip install stemmata[publish]` "
-            "to enable $schema enforcement"
-        )
-        if opts.strict:
-            return [SchemaError(msg, file=file, field_name="$schema", reason="jsonschema_missing")]
-        _warn(opts.stderr, msg)
-        return []
-
     try:
         schema = _fetch_schema(schema_uri, opts)
-    except OfflineError as e:
-        if opts.strict:
-            return [SchemaError(
-                f"--offline: cannot fetch $schema {schema_uri!r} and no cached copy is available",
-                file=file,
-                field_name="$schema",
-                reason="schema_unavailable_offline",
-            )]
-        _warn(opts.stderr, f"skipping $schema {schema_uri!r}: offline and not cached")
-        return []
+    except OfflineError:
+        return [SchemaError(
+            f"--offline: cannot fetch $schema {schema_uri!r} and no cached copy is available",
+            file=file,
+            field_name="$schema",
+            reason="schema_unavailable_offline",
+        )]
     except NetworkError as e:
-        if opts.strict:
-            return [SchemaError(
-                f"failed to fetch $schema {schema_uri!r}: {e.message}",
-                file=file,
-                field_name="$schema",
-                reason="schema_fetch_failed",
-            )]
-        _warn(opts.stderr, f"skipping $schema {schema_uri!r}: {e.message}")
-        return []
+        return [SchemaError(
+            f"failed to fetch $schema {schema_uri!r}: {e.message}",
+            file=file,
+            field_name="$schema",
+            reason="schema_fetch_failed",
+        )]
     except SchemaError as e:
         return [e]
 
-    import jsonschema  # type: ignore[import-not-found]
-    from jsonschema import Draft202012Validator  # type: ignore[import-not-found]
-
     try:
         validator = Draft202012Validator(schema)
-    except jsonschema.exceptions.SchemaError as e:  # type: ignore[attr-defined]
+    except jsonschema.exceptions.SchemaError as e:
         return [SchemaError(
             f"$schema {schema_uri!r} is not a valid JSON Schema: {e.message}",
             file=file,

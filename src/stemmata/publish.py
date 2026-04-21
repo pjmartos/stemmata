@@ -49,7 +49,6 @@ from stemmata.yaml_loader import scalar_meta
 class PublishOptions:
     package_root: Path
     dry_run: bool = False
-    strict_schema: bool = False
     tarball_out: Path | None = None
     config: NpmConfig | None = None
     offline: bool = False
@@ -267,7 +266,6 @@ def run_publish(opts: PublishOptions) -> PublishResult:
     config = opts.config if opts.config is not None else NpmConfig(entries={})
     schema_opts = SchemaCheckOptions(
         offline=opts.offline,
-        strict=opts.strict_schema,
         refresh=opts.refresh,
         http_timeout=opts.http_timeout,
         cache_root=opts.cache_root,

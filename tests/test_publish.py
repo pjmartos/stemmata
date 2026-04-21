@@ -176,31 +176,7 @@ def test_publish_uploads_when_not_dry_run(tmp_path, monkeypatch):
     assert "package/prompts/base.yaml" in names
 
 
-def test_schema_validation_skipped_without_jsonschema(tmp_path):
-    _write_pkg(tmp_path, {
-        "name": "@acme/p",
-        "version": "1.0.0",
-        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
-    }, {
-        "prompts/base.yaml": '$schema: "https://example.com/schema.json"\nx: 1\n',
-    })
-    # In non-strict mode and without jsonschema installed (or unreachable URL),
-    # the publish should not fail because of the schema URI alone.
-    try:
-        result = run_publish(_opts(tmp_path))
-        assert result.uploaded is False
-    except AggregatedError as e:
-        # If jsonschema *is* installed, the network fetch will fail and a
-        # warning is emitted (non-strict). If a real fetch attempt yields
-        # NetworkError, in non-strict mode it should also be a warning.
-        # Anything aggregated must not be schema-related in non-strict mode.
-        for err in e.details["errors"]:
-            assert err["details"].get("reason") not in {
-                "schema_validation_failed", "schema_unavailable_offline",
-            }
-
-
-def test_strict_schema_offline_errors(tmp_path):
+def test_unfetchable_schema_is_always_error(tmp_path):
     _write_pkg(tmp_path, {
         "name": "@acme/p",
         "version": "1.0.0",
@@ -208,10 +184,21 @@ def test_strict_schema_offline_errors(tmp_path):
     }, {
         "prompts/base.yaml": '$schema: "https://example.invalid/schema.json"\nx: 1\n',
     })
-    opts = _opts(tmp_path, strict_schema=True, offline=True)
     with pytest.raises(AggregatedError) as ei:
-        run_publish(opts)
+        run_publish(_opts(tmp_path, offline=True))
     reasons = [e["details"].get("reason") for e in ei.value.details["errors"]]
-    # Either jsonschema is missing (then jsonschema_missing) or jsonschema is
-    # installed and offline mode prevents fetching (schema_unavailable_offline).
-    assert any(r in {"jsonschema_missing", "schema_unavailable_offline"} for r in reasons)
+    assert "schema_unavailable_offline" in reasons
+
+
+def test_unfetchable_local_schema_is_always_error(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }, {
+        "prompts/base.yaml": '$schema: "./missing.schema.json"\nx: 1\n',
+    })
+    with pytest.raises(AggregatedError) as ei:
+        run_publish(_opts(tmp_path))
+    reasons = [e["details"].get("reason") for e in ei.value.details["errors"]]
+    assert "schema_file_not_found" in reasons

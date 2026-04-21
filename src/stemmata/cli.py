@@ -78,7 +78,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     validate_cmd = subs.add_parser("validate")
     validate_cmd.add_argument("target", nargs="?")
-    validate_cmd.add_argument("--strict-schema", action="store_true", default=False)
     validate_cmd.add_argument("--max-prompts", type=int, default=1000)
     validate_cmd.add_argument("--max-depth", type=int, default=50)
     validate_cmd.add_argument("--max-download-size", type=int, default=64 * 1024 * 1024)
@@ -107,7 +106,6 @@ def _build_parser() -> argparse.ArgumentParser:
     publish_cmd = subs.add_parser("publish")
     publish_cmd.add_argument("path", nargs="?", default=".")
     publish_cmd.add_argument("--dry-run", action="store_true", default=False)
-    publish_cmd.add_argument("--strict-schema", action="store_true", default=False)
     publish_cmd.add_argument("--tarball", default=None,
                              help="write the built tarball to this path (implies --dry-run unless combined with upload)")
     publish_cmd.add_argument("--max-prompts", type=int, default=1000)
@@ -448,7 +446,6 @@ def _run_publish(args: argparse.Namespace, stdout, stderr) -> int:
     opts = PublishOptions(
         package_root=package_root,
         dry_run=bool(args.dry_run),
-        strict_schema=bool(args.strict_schema),
         tarball_out=tarball_out,
         config=config,
         offline=bool(args.offline),
@@ -521,7 +518,7 @@ def _run_validate(args: argparse.Namespace, stdout, stderr) -> int:
         )
 
     schema_opts = SchemaCheckOptions(
-        offline=args.offline, strict=bool(args.strict_schema), refresh=args.refresh,
+        offline=args.offline, refresh=args.refresh,
         http_timeout=http_timeout, cache_root=cache_root, stderr=stderr,
     )
     payload = run_validate(args.target, session_factory, schema_opts)

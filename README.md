@@ -35,7 +35,7 @@ Prompt reuse across repositories is a mess. You copy a YAML prompt into a new pr
 pip install stemmata
 ```
 
-Requires **Python 3.12+** (for `tarfile.data_filter`). Sole third-party dependency is `PyYAML`.
+Requires **Python 3.12+** (for `tarfile.data_filter`). Third-party dependencies: `PyYAML` and `jsonschema`.
 
 ## Quick Start
 
@@ -93,9 +93,9 @@ On success, stdout carries the resolved YAML (or a JSON envelope with `{root, co
 
 Builds and uploads the package at `path` (default `.`) to the registry routed by `~/.npmrc`. Before any bytes leave the machine, every prompt listed in `package.json` is checked for: (1) ancestor cycles, (2) intra-document type conflicts, (3) placeholder resolvability against the fully resolved namespace, (4) `dependencies` consistency with the cross-package references found in the prompts (including those inside `${resource:...}` placeholders), (5) manifest closure under relative-path references — every local `ancestors` entry must resolve to a path that is itself declared in `prompts`, since only manifest-listed files are bundled, (6) `$schema` validation against the prompt's content contract, and (7) resource-graph integrity — every `${resource:...}` occupies an allowed position, every local resource reference resolves to an entry in the `resources` array, and the Markdown-embedding graph contains no cycles. All errors discovered in the pass are aggregated into a single envelope; the headline exit code is the most severe one (cycle > schema > reference > merge > placeholder).
 
-Flags: `--dry-run` (build the tarball but skip upload), `--strict-schema` (treat unfetchable / unvalidated `$schema` as an error rather than a warning), `--tarball <path>` (write the built tarball to `path`). The tarball is deterministic: identical inputs produce byte-identical output.
+Flags: `--dry-run` (build the tarball but skip upload), `--tarball <path>` (write the built tarball to `path`). The tarball is deterministic: identical inputs produce byte-identical output.
 
-`$schema` enforcement requires `pip install stemmata[publish]` (adds `jsonschema`). Without it, `publish` warns and skips schema validation in default mode, or errors in `--strict-schema` mode.
+`$schema` enforcement is always on. An unfetchable `$schema` URI (missing local file, offline with no cache, or network failure) aborts with exit code `10`.
 
 ### `validate <target>`
 
@@ -105,9 +105,9 @@ Multi-document YAML files (separated by `---`) are supported — each sub-docume
 
 All violations are collected and reported together. Error payloads include the natural source line number of the offending value.
 
-Flags: `--strict-schema` (treat unfetchable schemas as errors), plus the same resource-limit flags as `resolve`.
+Flags: the same resource-limit flags as `resolve`. An unfetchable `$schema` URI (missing file, offline with no cache, or network failure) aborts with exit code `10`.
 
-`$schema` enforcement requires `pip install stemmata[publish]` (adds `jsonschema`). Supports `file://`, `http://`, and `https://` URIs, as well as bare relative paths (resolved against the validated file's directory).
+`$schema` enforcement supports `file://`, `http://`, and `https://` URIs, as well as bare relative paths (resolved against the validated file's directory).
 
 ### `describe <target>`
 
