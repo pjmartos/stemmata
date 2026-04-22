@@ -104,6 +104,9 @@ def _build_parser() -> argparse.ArgumentParser:
     describe_cmd.add_argument("--http-timeout", default="30s")
     describe_cmd.add_argument("--timeout", default="5m")
 
+    init_cmd = subs.add_parser("init")
+    init_cmd.add_argument("path", nargs="?", default=".")
+
     publish_cmd = subs.add_parser("publish")
     publish_cmd.add_argument("path", nargs="?", default=".")
     publish_cmd.add_argument("--dry-run", action="store_true", default=False)
@@ -478,6 +481,30 @@ def _run_describe(args: argparse.Namespace, stdout, stderr) -> int:
     return 0
 
 
+def _run_init(args: argparse.Namespace, stdout, stderr) -> int:
+    from stemmata.init import run_init
+
+    result = run_init(Path(args.path))
+    payload = {
+        "manifest_path": result.manifest_path,
+        "created": result.created,
+        "name": result.name,
+        "version": result.version,
+        "license": result.license,
+        "prompts": result.prompts,
+        "resources": result.resources,
+    }
+    env = success("init", payload)
+    out_mode = args.output or "yaml"
+    if out_mode == "text":
+        stdout.write(to_text(env))
+    elif out_mode == "json":
+        stdout.write(to_json(env))
+    else:
+        stdout.write(to_yaml(env))
+    return 0
+
+
 def _run_publish(args: argparse.Namespace, stdout, stderr) -> int:
     from stemmata.publish import PublishOptions, run_publish
 
@@ -622,12 +649,14 @@ def run(argv: list[str] | None = None, *, stdout=None, stderr=None) -> int:
             return _run_validate(args, stdout, stderr)
         if args.cmd == "publish":
             return _run_publish(args, stdout, stderr)
+        if args.cmd == "init":
+            return _run_init(args, stdout, stderr)
         if args.cmd == "describe":
             return _run_describe(args, stdout, stderr)
         if args.cmd == "tree":
             return _run_tree(args, stdout, stderr)
         raise UsageError(
-            "no subcommand provided (try 'resolve', 'describe', 'tree', 'validate', 'publish', or 'cache clear')",
+            "no subcommand provided (try 'resolve', 'describe', 'tree', 'validate', 'publish', 'init', or 'cache clear')",
             argument="<subcommand>",
             reason="missing_subcommand",
         )
@@ -640,6 +669,8 @@ def run(argv: list[str] | None = None, *, stdout=None, stderr=None) -> int:
             command_name = "validate"
         elif args.cmd == "publish":
             command_name = "publish"
+        elif args.cmd == "init":
+            command_name = "init"
         elif args.cmd == "describe":
             command_name = "describe"
         elif args.cmd == "tree":

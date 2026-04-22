@@ -63,6 +63,9 @@ stemmata validate ./prompts/
 
 # Wipe the local cache (by default stored under ~/.cache/stemmata):
 stemmata cache clear
+
+# Scaffold a package.json for an existing directory of prompts and resources:
+stemmata init ./my-package
 ```
 
 ## CLI Reference
@@ -134,6 +137,10 @@ root.yaml
 ```
 
 `--output yaml` / `--output json` emit a `{root, nodes[], edges[]}` envelope instead, with each node carrying its canonical id, source file, BFS distance from the root, and `kind` (`prompt` or `resource`). Edges carry `kind` (`ancestor` or `resource`).
+
+### `init [path]`
+
+Scaffolds (or updates) a `package.json` at `path` (default `.`). Scans `./prompts` recursively for `.yaml`, `.yml`, and `.json` files and `./resources` recursively for `.md` files, deriving each entry's `id` from the basename and setting `contentType` from the extension. Entries are sorted alphabetically by path and rendered one-per-line.
 
 ### `cache clear`
 
