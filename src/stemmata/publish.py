@@ -17,23 +17,16 @@ from stemmata.bundle import (
 from stemmata.cache import Cache, default_cache_dir
 from stemmata.deps_check import check_consistency
 from stemmata.errors import (
+    AbstractUnfilledError,
     AggregatedError,
-    MergeError,
-    NetworkError,
-    OfflineError,
     PromptCliError,
     SchemaError,
-    UnresolvableError,
 )
 from stemmata.interp import (
     Layer,
     ResourceBinding,
-    _exact_placeholder,
-    _is_scalar,
-    _parse_placeholder_tokens,
-    _resource_body,
+    collect_placeholder_errors,
     interpolate,
-    lookup_with_provenance,
 )
 from stemmata.manifest import Manifest, parse_manifest
 from stemmata.merge import merge_namespaces
@@ -42,7 +35,6 @@ from stemmata.registry import RegistryClient
 from stemmata.resolver import Session, layer_order, resolve_graph
 from stemmata.resource_resolve import build_resource_binding
 from stemmata.schema_check import SchemaCheckOptions, resolve_schema_uri, validate_against_schema
-from stemmata.yaml_loader import scalar_meta
 
 
 @dataclass
@@ -74,84 +66,7 @@ class PublishResult:
     uploaded: bool
     registry_url: str | None
     prompts_checked: list[str] = field(default_factory=list)
-
-
-def _walk_collect_placeholder_errors(
-    node: Any,
-    namespace: Any,
-    layers: list[Layer],
-    *,
-    parent_is_list: bool,
-    root_file: str,
-    out: list[PromptCliError],
-) -> None:
-    """Mirror of ``interp._interp`` that collects every placeholder failure
-    instead of raising on the first one."""
-    if isinstance(node, dict):
-        for v in node.values():
-            _walk_collect_placeholder_errors(
-                v, namespace, layers,
-                parent_is_list=False, root_file=root_file, out=out,
-            )
-        return
-    if isinstance(node, list):
-        for item in node:
-            _walk_collect_placeholder_errors(
-                item, namespace, layers,
-                parent_is_list=True, root_file=root_file, out=out,
-            )
-        return
-    if not isinstance(node, str):
-        return
-
-    file, line, column, is_flow = scalar_meta(node)
-    file = file or root_file
-    exact, non_splat, inner_path = _exact_placeholder(node)
-    if exact and is_flow and _resource_body(inner_path) is not None:
-        return
-    if exact and is_flow:
-        path = inner_path.strip()
-        value, status, provider, searched = lookup_with_provenance(namespace, layers, path)
-        if status == "not_provided":
-            out.append(UnresolvableError(
-                path, file=file, line=line, column=column,
-                reason="not_provided", ancestors_searched=searched, providing_ancestor=None,
-            ))
-        elif status == "explicit_null":
-            out.append(UnresolvableError(
-                path, file=file, line=line, column=column,
-                reason="explicit_null", ancestors_searched=searched, providing_ancestor=provider,
-            ))
-        return
-
-    tokens = _parse_placeholder_tokens(str(node))
-    for kind, val in tokens:
-        if kind != "ph":
-            continue
-        if _resource_body(val) is not None:
-            continue
-        inner = val
-        if inner.startswith("="):
-            inner = inner[1:]
-        inner = inner.strip()
-        value, status, provider, searched = lookup_with_provenance(namespace, layers, inner)
-        if status == "not_provided":
-            out.append(UnresolvableError(
-                inner, file=file, line=line, column=column,
-                reason="not_provided", ancestors_searched=searched, providing_ancestor=None,
-            ))
-        elif status == "explicit_null":
-            out.append(UnresolvableError(
-                inner, file=file, line=line, column=column,
-                reason="explicit_null", ancestors_searched=searched, providing_ancestor=provider,
-            ))
-        elif not _is_scalar(value):
-            out.append(MergeError(
-                path=inner,
-                conflict="non_scalar_in_textual",
-                types=[type(value).__name__],
-                nodes=[{"file": file, "line": line, "column": column, "ancestor": root_file}],
-            ))
+    abstracts: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _check_one_prompt(
@@ -161,13 +76,9 @@ def _check_one_prompt(
     schema_opts: SchemaCheckOptions,
     config: NpmConfig,
     publish_package: tuple[Manifest, Path] | None = None,
-) -> list[PromptCliError]:
-    """Run cycle / type / placeholder / $schema checks on a single prompt.
-
-    Each prompt is resolved against a fresh session so version-override state
-    from one prompt's resolution does not bleed into the next.
-    """
+) -> tuple[list[PromptCliError], list[AbstractUnfilledError]]:
     errors: list[PromptCliError] = []
+    abstracts: list[AbstractUnfilledError] = []
 
     cache_root = opts.cache_root or default_cache_dir()
     cache = Cache(root=cache_root)
@@ -185,20 +96,14 @@ def _check_one_prompt(
         strict_parse=False,
     )
     if publish_package is not None:
-        # Pre-register the local package so same-package relative ${resource:...}
-        # references resolve through its manifest before the tarball is published.
         manifest, pkg_root = publish_package
         session._manifest_by_pkg[(manifest.name, manifest.version)] = (manifest, pkg_root)
 
     try:
         graph = resolve_graph(str(prompt_path), session)
     except PromptCliError as e:
-        # Cycles, missing references, schema problems in ancestors, network /
-        # offline errors all surface here. Each is fatal for *this* prompt's
-        # check; we cannot meaningfully run the placeholder pass without a
-        # resolved graph, so we return early with what we have.
         errors.append(e)
-        return errors
+        return errors, abstracts
 
     order = layer_order(graph)
     layers_data = [graph.nodes[nid].doc.namespace for nid in order]
@@ -207,16 +112,18 @@ def _check_one_prompt(
         merged = merge_namespaces(layers_data, provenance=provenance)
     except PromptCliError as e:
         errors.append(e)
-        return errors
+        return errors, abstracts
 
     layers = [Layer(canonical_id=nid.canonical, data=graph.nodes[nid].doc.namespace) for nid in order]
-    placeholder_errors: list[PromptCliError] = []
-    _walk_collect_placeholder_errors(
+    diagnostics: list[Any] = []
+    collect_placeholder_errors(
         merged, merged, layers,
         parent_is_list=False,
         root_file=graph.nodes[graph.root_id].file,
-        out=placeholder_errors,
+        out=diagnostics,
     )
+    placeholder_errors = [e for e in diagnostics if not isinstance(e, AbstractUnfilledError)]
+    abstracts = [e for e in diagnostics if isinstance(e, AbstractUnfilledError)]
     errors.extend(placeholder_errors)
 
     resources: ResourceBinding | None = None
@@ -231,6 +138,8 @@ def _check_one_prompt(
     if schema_uri:
         schema_uri = resolve_schema_uri(schema_uri, str(prompt_path))
         position_ns = graph.nodes[graph.root_id].doc.namespace
+        if abstracts:
+            return errors, abstracts
         if placeholder_errors or resource_errors:
             schema_target = merged
         else:
@@ -247,7 +156,7 @@ def _check_one_prompt(
             position_instance=position_ns,
         ))
 
-    return errors
+    return errors, abstracts
 
 
 def run_publish(opts: PublishOptions) -> PublishResult:
@@ -275,16 +184,34 @@ def run_publish(opts: PublishOptions) -> PublishResult:
 
     aggregated: list[PromptCliError] = []
     checked_ids: list[str] = []
+    abstracts_payload: list[dict[str, Any]] = []
 
     for entry in manifest.prompts:
         prompt_path = package_root / entry.path
         canonical = f"{manifest.name}@{manifest.version}#{entry.id}"
         checked_ids.append(canonical)
-        per_prompt = _check_one_prompt(
+        per_errors, per_abstracts = _check_one_prompt(
             prompt_path, canonical, opts, schema_opts, config,
             publish_package=(manifest, package_root),
         )
-        aggregated.extend(per_prompt)
+        aggregated.extend(per_errors)
+        if per_abstracts:
+            paths = [a.details.get("placeholder") for a in per_abstracts]
+            stderr = opts.stderr if opts.stderr is not None else sys.stderr
+            stderr.write(
+                f"warning: prompt {canonical} has {len(per_abstracts)} unfilled "
+                f"abstract placeholder(s): {', '.join(str(p) for p in paths)}\n"
+            )
+            for a in per_abstracts:
+                loc = a.location if isinstance(a.location, dict) else {}
+                abstracts_payload.append({
+                    "prompt": canonical,
+                    "file": str(prompt_path),
+                    "path": a.details.get("placeholder"),
+                    "line": loc.get("line"),
+                    "column": loc.get("column"),
+                    "reason": a.details.get("reason"),
+                })
 
     aggregated.extend(check_consistency(manifest, package_root, manifest_file=str(manifest_file)))
 
@@ -335,4 +262,5 @@ def run_publish(opts: PublishOptions) -> PublishResult:
         uploaded=uploaded,
         registry_url=registry_url,
         prompts_checked=checked_ids,
+        abstracts=abstracts_payload,
     )

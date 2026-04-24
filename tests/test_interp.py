@@ -1,6 +1,6 @@
 import pytest
 
-from stemmata.errors import CycleError, MergeError, UnresolvableError
+from stemmata.errors import AbstractUnfilledError, CycleError, MergeError, UnresolvableError
 from stemmata.interp import Layer, interpolate
 from stemmata.yaml_loader import attach_file, load_with_positions
 
@@ -173,3 +173,216 @@ def test_non_scalar_in_textual_via_chain():
             "x: prefix ${a} suffix\n",
             [{"a": "${b}", "b": [1, 2, 3]}],
         )
+
+
+def test_abstract_resolved_by_descendant():
+    result = _interp(
+        "msg: ${abstract:greeting}\n",
+        [{"greeting": "hello"}],
+    )
+    assert result["msg"] == "hello"
+
+
+def test_abstract_unfilled_raises_exit16():
+    with pytest.raises(AbstractUnfilledError) as exc:
+        _interp("msg: ${abstract:greeting}\n", [])
+    assert exc.value.code == 16
+    assert exc.value.details["reason"] == "not_provided"
+    assert exc.value.details["placeholder"] == "greeting"
+
+
+def test_abstract_filled_through_intermediate_layer():
+    result = _interp(
+        "msg: ${abstract:greeting}\n",
+        [{"other": 1}, {"greeting": "hola"}],
+    )
+    assert result["msg"] == "hola"
+
+
+def test_abstract_in_block_scalar():
+    result = _interp(
+        "body: |\n  prefix ${abstract:name} suffix\n",
+        [{"name": "world"}],
+    )
+    assert result["body"] == "prefix world suffix\n"
+
+
+def test_abstract_null_shadow_raises_with_null_shadow_reason():
+    with pytest.raises(AbstractUnfilledError) as exc:
+        _interp("msg: ${abstract:greeting}\n", [{"greeting": None}])
+    assert exc.value.code == 16
+    assert exc.value.details["reason"] == "null_shadow"
+
+
+def test_abstract_does_not_satisfy_abstract_exact_flow():
+    with pytest.raises(AbstractUnfilledError) as exc:
+        _interp(
+            "msg: ${abstract:greeting}\n",
+            [{"greeting": "${abstract:greeting}"}],
+        )
+    assert exc.value.details["reason"] == "abstract_inherited"
+
+
+def test_abstract_does_not_satisfy_abstract_textual():
+    with pytest.raises(AbstractUnfilledError) as exc:
+        _interp(
+            "msg: hello ${abstract:greeting} world\n",
+            [{"greeting": "${abstract:greeting}"}],
+        )
+    assert exc.value.details["reason"] == "abstract_inherited"
+
+
+def test_abstract_cross_path_inherited_still_unfilled():
+    with pytest.raises(AbstractUnfilledError):
+        _interp(
+            "msg: ${abstract:foo}\n",
+            [{"foo": "${abstract:bar}"}],
+        )
+
+
+def test_abstract_exact_structural_scalar_returns_concrete():
+    result = _interp("x: ${abstract:val}\n", [{"val": 42}])
+    assert result["x"] == 42
+
+
+def test_abstract_non_scalar_in_textual_raises_merge():
+    with pytest.raises(MergeError):
+        _interp(
+            "x: prefix ${abstract:val} suffix\n",
+            [{"val": [1, 2, 3]}],
+        )
+
+
+def test_abstract_empty_body_in_flow_raises():
+    with pytest.raises(UnresolvableError):
+        _interp("x: ${abstract:}\n", [])
+
+
+def test_abstract_empty_body_in_textual_raises():
+    with pytest.raises(UnresolvableError):
+        _interp("x: hi ${abstract:} bye\n", [])
+
+
+def test_abstract_filled_at_nested_path():
+    result = _interp(
+        "x: ${abstract:db.host}\n",
+        [{"db": {"host": "localhost"}}],
+    )
+    assert result["x"] == "localhost"
+
+
+def test_collect_placeholder_errors_splits_abstracts_from_real():
+    from stemmata.errors import AbstractUnfilledError as AU, UnresolvableError as UE
+    from stemmata.interp import collect_placeholder_errors
+
+    data = _load("body: hello ${abstract:name} and ${missing}\n")
+    layers = [Layer(canonical_id="l0", data=data)]
+    out: list = []
+    collect_placeholder_errors(data, data, layers, parent_is_list=False, root_file="x.yaml", out=out)
+    abstracts = [e for e in out if isinstance(e, AU)]
+    others = [e for e in out if isinstance(e, UE)]
+    assert len(abstracts) == 1
+    assert abstracts[0].details["placeholder"] == "name"
+    assert len(others) == 1
+    assert others[0].details["placeholder"] == "missing"
+
+
+def test_collect_placeholder_errors_enumerates_all_abstracts():
+    from stemmata.errors import AbstractUnfilledError as AU
+    from stemmata.interp import collect_placeholder_errors
+
+    data = _load(
+        "one: ${abstract:a}\n"
+        "two: ${abstract:b}\n"
+        "body: |\n"
+        "  ${abstract:c} and ${abstract:d}\n"
+    )
+    layers = [Layer(canonical_id="l0", data=data)]
+    out: list = []
+    collect_placeholder_errors(data, data, layers, parent_is_list=False, root_file="x.yaml", out=out)
+    paths = sorted(e.details["placeholder"] for e in out if isinstance(e, AU))
+    assert paths == ["a", "b", "c", "d"]
+
+
+def test_scan_abstract_references_reports_per_occurrence_positions():
+    from stemmata.interp import scan_abstract_references
+
+    data = _load(
+        "system_message: |\n"
+        "  You are ${abstract:persona.name}, a ${abstract:persona.role}.\n"
+        "  Always answer in a ${abstract:persona.tone} tone.\n"
+    )
+    refs = scan_abstract_references(data, file_fallback="x.yaml")
+    by_path = {r.path: (r.line, r.column) for r in refs}
+    assert len(by_path) == 3
+    assert len({pos for pos in by_path.values()}) == 3
+    assert by_path["persona.name"][0] == by_path["persona.role"][0]
+    assert by_path["persona.name"][1] < by_path["persona.role"][1]
+    assert by_path["persona.tone"][0] > by_path["persona.name"][0]
+
+
+def test_collect_placeholder_errors_reports_per_occurrence_positions():
+    from stemmata.errors import AbstractUnfilledError as AU
+    from stemmata.interp import collect_placeholder_errors
+
+    data = _load(
+        "body: |\n"
+        "  alpha ${abstract:one} beta ${abstract:two}\n"
+        "  gamma ${abstract:three}\n"
+    )
+    layers = [Layer(canonical_id="l0", data=data)]
+    out: list = []
+    collect_placeholder_errors(data, data, layers, parent_is_list=False, root_file="x.yaml", out=out)
+    positions = {e.details["placeholder"]: (e.location["line"], e.location["column"])
+                 for e in out if isinstance(e, AU)}
+    assert len(positions) == 3
+    assert len({pos for pos in positions.values()}) == 3
+    assert positions["one"][0] == positions["two"][0]
+    assert positions["one"][1] < positions["two"][1]
+    assert positions["three"][0] > positions["one"][0]
+
+
+def test_interp_abstract_error_reports_per_occurrence_position():
+    from stemmata.errors import AbstractUnfilledError
+
+    with pytest.raises(AbstractUnfilledError) as exc:
+        _interp(
+            "body: |\n  alpha ${abstract:one} beta ${abstract:two}\n",
+            [{"one": "filled"}],
+        )
+    assert exc.value.details["placeholder"] == "two"
+    loc = exc.value.location
+    assert loc["line"] is not None and loc["column"] is not None
+
+
+def test_scan_declared_abstracts_is_declaration_only():
+    from stemmata.interp import scan_declared_abstracts
+
+    data = _load(
+        "flow: ${abstract:one}\n"                      # declaration (exact scalar)
+        "mixed: hello ${abstract:two} there\n"         # usage, not a declaration
+        "nested:\n"
+        "  inner: ${abstract:three}\n"                 # declaration
+        "list:\n"
+        "  - ${abstract:four}\n"                       # declaration (element is exact)
+        "  - plain text\n"
+        "block: |\n"
+        "  ${abstract:five}\n"                         # usage (block scalar is textual)
+    )
+    refs = scan_declared_abstracts(data, file_fallback="x.yaml")
+    paths = sorted(r.path for r in refs)
+    assert paths == ["four", "one", "three"]
+
+
+def test_scan_abstract_references_includes_usages():
+    from stemmata.interp import scan_abstract_references
+
+    data = _load(
+        "flow: ${abstract:one}\n"
+        "mixed: hello ${abstract:two} there\n"
+        "block: |\n"
+        "  ${abstract:three}\n"
+    )
+    refs = scan_abstract_references(data, file_fallback="x.yaml")
+    paths = sorted(r.path for r in refs)
+    assert paths == ["one", "three", "two"]

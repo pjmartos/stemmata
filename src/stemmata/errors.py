@@ -12,6 +12,7 @@ EXIT_REFERENCE = 11
 EXIT_CYCLE = 12
 EXIT_UNRESOLVABLE = 14
 EXIT_MERGE = 15
+EXIT_ABSTRACT_UNFILLED = 16
 EXIT_NETWORK = 20
 EXIT_CACHE = 21
 EXIT_OFFLINE = 22
@@ -25,6 +26,7 @@ CATEGORIES = {
     EXIT_CYCLE: "cycle_detected",
     EXIT_UNRESOLVABLE: "unresolvable_placeholder",
     EXIT_MERGE: "merge_failure",
+    EXIT_ABSTRACT_UNFILLED: "abstract_unfilled",
     EXIT_NETWORK: "network_error",
     EXIT_CACHE: "cache_error",
     EXIT_OFFLINE: "offline_violation",
@@ -129,6 +131,29 @@ class MergeError(PromptCliError):
         )
 
 
+class AbstractUnfilledError(PromptCliError):
+    def __init__(
+        self,
+        placeholder: str,
+        *,
+        file: str | None,
+        line: int | None,
+        column: int | None,
+        reason: str,
+        ancestors_searched: list[str],
+    ):
+        super().__init__(
+            EXIT_ABSTRACT_UNFILLED,
+            f"Abstract ${{abstract:{placeholder}}} in {file}:{line} is unfilled ({reason})",
+            {"file": file, "line": line, "column": column},
+            {
+                "reason": reason,
+                "placeholder": placeholder,
+                "ancestors_searched": ancestors_searched,
+            },
+        )
+
+
 class NetworkError(PromptCliError):
     def __init__(self, url: str, http_status: int | None, reason: str):
         super().__init__(
@@ -179,6 +204,7 @@ _AGG_PRIORITY = [
     EXIT_REFERENCE,
     EXIT_MERGE,
     EXIT_UNRESOLVABLE,
+    EXIT_ABSTRACT_UNFILLED,
     EXIT_NETWORK,
     EXIT_CACHE,
     EXIT_OFFLINE,

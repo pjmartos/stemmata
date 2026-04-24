@@ -23,7 +23,14 @@ from stemmata.errors import (
     ReferenceError_,
     UsageError,
 )
-from stemmata.interp import Layer, interpolate
+from stemmata.errors import AbstractUnfilledError
+from stemmata.interp import (
+    AbstractRef,
+    Layer,
+    collect_placeholder_errors,
+    interpolate,
+    scan_abstract_references,
+)
 from stemmata.manifest import is_scoped_name, is_semver
 from stemmata.merge import merge_namespaces
 from stemmata.npmrc import load_npmrc
@@ -187,7 +194,13 @@ def _parse_package_coord(target: str) -> tuple[str, str, str | None]:
     return pkg, version, prompt_id
 
 
-def _resolve_coord(pkg: str, version: str, prompt_id: str, session: Session) -> tuple[str, Any, list[dict[str, Any]], str]:
+def _ref_payload(ref: AbstractRef) -> dict[str, Any]:
+    return {"path": ref.path, "file": ref.file, "line": ref.line, "column": ref.column}
+
+
+def _resolve_coord(
+    pkg: str, version: str, prompt_id: str, session: Session,
+) -> tuple[str, Any, list[dict[str, Any]], str, dict[str, list[dict[str, Any]]]]:
     session.version_overrides = {}
     target = f"{pkg}@{version}#{prompt_id}"
     graph = resolve_graph(target, session)
@@ -198,13 +211,53 @@ def _resolve_coord(pkg: str, version: str, prompt_id: str, session: Session) -> 
     layers = [Layer(canonical_id=nid.canonical, data=graph.nodes[nid].doc.namespace) for nid in order]
     root_file = graph.nodes[graph.root_id].file
     resources = build_resource_binding(graph, session)
-    resolved = interpolate(merged, layers, root_file=root_file, resources=resources)
+
+    diagnostics: list[Any] = []
+    collect_placeholder_errors(
+        merged, merged, layers,
+        parent_is_list=False, root_file=root_file, out=diagnostics,
+    )
+    unfilled_paths: set[str] = {
+        e.details.get("placeholder") for e in diagnostics
+        if isinstance(e, AbstractUnfilledError)
+    }
+
+    root_namespace = graph.nodes[graph.root_id].doc.namespace
+    root_refs = scan_abstract_references(root_namespace, file_fallback=root_file)
+    declared_here: set[str] = {r.path for r in root_refs}
+    declared_refs = [r for r in root_refs if r.path in unfilled_paths]
+
+    inherited_refs: list[AbstractRef] = []
+    seen: set[tuple[str, str | None, int | None, int | None]] = set()
+    for e in diagnostics:
+        if not isinstance(e, AbstractUnfilledError):
+            continue
+        path = e.details.get("placeholder")
+        if path in declared_here:
+            continue
+        loc = e.location if isinstance(e.location, dict) else {}
+        ref = AbstractRef(path=path, file=loc.get("file"), line=loc.get("line"), column=loc.get("column"))
+        key = (ref.path, ref.file, ref.line, ref.column)
+        if key in seen:
+            continue
+        seen.add(key)
+        inherited_refs.append(ref)
+
+    if unfilled_paths:
+        content: Any = merged
+    else:
+        content = interpolate(merged, layers, root_file=root_file, resources=resources)
+
     ancestors_payload = [
         {"canonical_id": nid.canonical, "distance": graph.distances[nid]}
         for nid in order
         if nid != graph.root_id
     ]
-    return graph.root_id.canonical, resolved, ancestors_payload, root_file
+    abstracts_payload = {
+        "declared": [_ref_payload(r) for r in declared_refs],
+        "inherited": [_ref_payload(r) for r in inherited_refs],
+    }
+    return graph.root_id.canonical, content, ancestors_payload, root_file, abstracts_payload
 
 
 def _run_resolve(args: argparse.Namespace, stdout, stderr) -> int:
@@ -278,10 +331,24 @@ def _label_for(canonical: str, kind: str) -> str:
     return f"resource:{canonical}" if kind == "resource" else canonical
 
 
+def _prompt_abstracts(graph) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for nid in graph.nodes:
+        refs = scan_abstract_references(
+            graph.nodes[nid].doc.namespace,
+            file_fallback=graph.nodes[nid].file,
+        )
+        paths = sorted({r.path for r in refs})
+        if paths:
+            result[nid.canonical] = paths
+    return result
+
+
 def _render_tree(graph, resources=None) -> str:
     prompt_resources = resources.prompt_resources if resources is not None else {}
     resource_children_map = resources.resource_children if resources is not None else {}
     canonical_to_nid = {nid.canonical: nid for nid in graph.nodes}
+    abstracts_by_prompt = _prompt_abstracts(graph)
 
     def children_of(canonical: str, kind: str) -> list[tuple[str, str]]:
         kids: list[tuple[str, str]] = []
@@ -297,14 +364,20 @@ def _render_tree(graph, resources=None) -> str:
                 kids.append((rc, "resource"))
         return kids
 
+    def labelled(canonical: str, kind: str) -> str:
+        base = _label_for(canonical, kind)
+        if kind == "prompt" and canonical in abstracts_by_prompt:
+            base += f"  [abstracts: {', '.join(abstracts_by_prompt[canonical])}]"
+        return base
+
     root_canonical = graph.root_id.canonical
     visited: set[str] = {root_canonical}
-    lines: list[str] = ["\n", _label_for(root_canonical, "prompt") + "\n"]
+    lines: list[str] = ["\n", labelled(root_canonical, "prompt") + "\n"]
 
     def walk(canonical: str, kind: str, prefix: str, is_last: bool) -> None:
         connector = "`-- " if is_last else "|-- "
         revisit = "  (seen)" if canonical in visited else ""
-        lines.append(f"{prefix}{connector}{_label_for(canonical, kind)}{revisit}\n")
+        lines.append(f"{prefix}{connector}{labelled(canonical, kind)}{revisit}\n")
         if canonical in visited:
             return
         visited.add(canonical)
@@ -360,12 +433,14 @@ def _run_tree(args: argparse.Namespace, stdout, stderr) -> int:
         stdout.write(_render_tree(graph, resources))
         return 0
 
+    abstracts_by_prompt = _prompt_abstracts(graph)
     nodes_payload: list[dict[str, Any]] = [
         {
             "id": nid.canonical,
             "file": graph.nodes[nid].file,
             "distance": graph.distances[nid],
             "kind": "prompt",
+            "abstracts": abstracts_by_prompt.get(nid.canonical, []),
         }
         for nid in graph.order
     ]
@@ -462,8 +537,13 @@ def _run_describe(args: argparse.Namespace, stdout, stderr) -> int:
             target_ids = [p.id for p in manifest.prompts]
         resolved_docs: list[dict[str, Any]] = []
         for pid in target_ids:
-            canonical, content, ancestors, _ = _resolve_coord(pkg, version, pid, session)
-            resolved_docs.append({"root": canonical, "content": content, "ancestors": ancestors})
+            canonical, content, ancestors, _, abstracts = _resolve_coord(pkg, version, pid, session)
+            resolved_docs.append({
+                "root": canonical,
+                "content": content,
+                "ancestors": ancestors,
+                "abstracts": abstracts,
+            })
     finally:
         if deadline_handler_installed:
             signal.setitimer(signal.ITIMER_REAL, 0)
@@ -473,6 +553,13 @@ def _run_describe(args: argparse.Namespace, stdout, stderr) -> int:
         parts: list[str] = []
         for d in resolved_docs:
             parts.append(f"---\n# {d['root']}\n")
+            abstr = d.get("abstracts") or {}
+            declared = abstr.get("declared") or []
+            inherited = abstr.get("inherited") or []
+            if declared:
+                parts.append("# abstracts.declared: " + ", ".join(sorted({r["path"] for r in declared})) + "\n")
+            if inherited:
+                parts.append("# abstracts.inherited: " + ", ".join(sorted({r["path"] for r in inherited})) + "\n")
             parts.append(_deterministic_yaml_dump(d["content"]))
         stdout.write("".join(parts))
         return 0
@@ -588,6 +675,7 @@ def _run_publish(args: argparse.Namespace, stdout, stderr) -> int:
         "uploaded": result.uploaded,
         "registry_url": result.registry_url,
         "prompts_checked": result.prompts_checked,
+        "abstracts": result.abstracts,
     }
     env = success("publish", payload)
     out_mode = args.output or "yaml"

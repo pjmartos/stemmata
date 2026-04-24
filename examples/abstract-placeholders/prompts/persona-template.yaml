@@ -1,0 +1,16 @@
+# A reusable mid-graph prompt. It defines the *skeleton* of a persona-based
+# system message and delegates the "variable" steps to descendants by
+# declaring three abstract placeholders:
+#
+#   - ${abstract:persona.name}       — what the persona is called
+#   - ${abstract:persona.tone}       — how the persona speaks
+#   - ${abstract:persona.role}       — what the persona is for
+#
+# This prompt can be published and consumed as a library. On its own it
+# cannot be `stemmata resolve`-d: that would exit 16 (abstract unfilled).
+# Any descendant that provides concrete values at these dotted paths
+# satisfies the contract and becomes resolvable.
+
+system_message: |
+  You are ${abstract:persona.name}, a ${abstract:persona.role}.
+  Always answer in a ${abstract:persona.tone} tone.

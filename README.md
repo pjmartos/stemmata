@@ -26,6 +26,7 @@ Prompt reuse across repositories is a mess. You copy a YAML prompt into a new pr
 - **Hierarchical composition**: prompts declare `ancestors` as paths or `(package, version, prompt)` coordinates; the full transitive closure is resolved eagerly via breadth-first search.
 - **Deterministic merging**: nearest-wins for scalars and lists, deep-merge for maps, with breadth-first search distance plus reference occurring-ordering (for breaking ties) so the output is reproducible.
 - **Placeholder interpolation**: `${path}` references resolve against the merged namespace, with structural, textual, and list-splat forms.
+- **Abstract placeholders**: a mid-graph prompt may declare required "holes" via `${abstract:<dotted-path>}`, and any descendant is free to fill them — like the template-method pattern in OOP. `resolve` hard-fails on unfilled holes (exit `16`); `publish`, `describe`, `tree`, and `validate` report them as contract information and keep working.
 - **Markdown resource embedding**: packages may ship Markdown payloads alongside prompts and splice them in as opaque text via `${resource:...}`, resolved eagerly on the same cache and registry rails as prompts.
 - **npm registry transport**: speaks the standard npm REST API; credentials read from `~/.npmrc`.
 
@@ -98,6 +99,8 @@ On success, stdout carries the resolved YAML (or a JSON envelope with `{root, co
 ### `publish [path]`
 
 Builds and uploads the package at `path` (default `.`) to the registry routed by `~/.npmrc`. Before any bytes leave the machine, every prompt listed in `package.json` is checked for: (1) ancestor cycles, (2) intra-document type conflicts, (3) placeholder resolvability against the fully resolved namespace, (4) `dependencies` consistency with the cross-package references found in the prompts (including those inside `${resource:...}` placeholders), (5) manifest closure under relative-path references — every local `ancestors` entry must resolve to a path that is itself declared in `prompts`, since only manifest-listed files are bundled, (6) `$schema` validation against the prompt's content contract, and (7) resource-graph integrity — every `${resource:...}` occupies an allowed position, every local resource reference resolves to an entry in the `resources` array, and the Markdown-embedding graph contains no cycles. All errors discovered in the pass are aggregated into a single envelope; the headline exit code is the most severe one (cycle > schema > reference > merge > placeholder).
+
+Abstract placeholders (`${abstract:<dotted-path>}`) are **not** treated as failures by `publish`: a library package whose prompts contain unfilled abstracts is the whole point. For every prompt that still has unfilled abstracts, `publish` logs a `warning:` line to stderr listing the holes, records them under `abstracts` in the success payload, and defers `$schema` content validation for that prompt (per the per-prompt all-or-nothing rule). Real placeholder / reference / merge errors found alongside abstracts still fail publish as before.
 
 Flags: `--dry-run` (build the tarball but skip upload), `--tarball <path>` (write the built tarball to `path`). The tarball is deterministic: identical inputs produce byte-identical output.
 
@@ -198,6 +201,47 @@ body: |
 
 Prompts may embed opaque Markdown payloads via `${resource:<POSIX-relative-path>}` (same-package) or `${resource:@<scope>/<name>@<version>#<id>}` (coordinate). The reference must stand alone — either as the sole content of a line inside a block scalar or a Markdown file, or as the entire trimmed text of a flow-style YAML scalar or JSON string. Resource payloads are substituted verbatim after ancestor-namespace interpolation; they do not contribute keys to the merged namespace and any `${...}` sequences inside them are left literal.
 
+### Abstract placeholders
+
+An author can mark a dotted-path as a required "hole" that any descendant must fill before the graph becomes resolvable:
+
+```yaml
+# @acme/prompts-core#persona (a reusable mid-graph prompt)
+persona:
+  tone: "${abstract:persona.tone}"         # required: any descendant must set persona.tone
+  greeting: "Hi — my tone is ${abstract:persona.tone}."
+```
+
+A descendant fills the hole by providing a concrete value at the same dotted path:
+
+```yaml
+# a concrete child
+ancestors:
+  - package: "@acme/prompts-core"
+    version: "1.0.0"
+    prompt: "persona"
+
+persona:
+  tone: "friendly"
+```
+
+Semantics:
+
+- **Syntax.** `${abstract:<dotted-path>}` — the prefix mirrors `${resource:…}` so dispatch is unambiguous and the form is JSON-safe.
+- **Usable positions.** An abstract marker stands in for a **string** value. It may appear as the sole content of any scalar (flow or block) or positionally inside a larger string scalar (`"prefix ${abstract:x} suffix"`). Map/list-shaped abstracts are not supported in v1.
+- **A hole is unfilled** iff, after BFS merge, the nearest value at the referenced dotted path is (a) absent, (b) explicit `null` (null shadowing does **not** satisfy an abstract), or (c) itself another `${abstract:…}` marker (an abstract does not satisfy another abstract). The per-case `reason` is reported in the error envelope as `not_provided`, `null_shadow`, or `abstract_inherited`.
+- **Per-prompt all-or-nothing validation.** For any given prompt, if its merged namespace has zero unfilled abstracts, placeholder interpolation and `$schema` content-contract validation run as normal. If one or more abstracts remain unfilled, both checks are deferred for that prompt — nothing about that prompt's content contract can be enforced until the contract is fulfilled.
+
+Subcommand behaviour:
+
+| Command    | Unfilled abstracts present                                                                                                           |
+|------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| `resolve`  | Hard-fails with exit `16`. The resolved artefact is not produced while any hole remains.                                             |
+| `validate` | Does **not** fail. Structural checks and cycle detection still run. Abstracts are reported under `abstracts` in the success payload. |
+| `publish`  | Does **not** fail. A `warning:` line is logged to stderr listing the unfilled abstracts, and each one is recorded under `abstracts` in the success payload. Schema validation is deferred for any prompt that still has holes. |
+| `describe` | Always works. Emits two labelled buckets per prompt: `abstracts.declared` (markers introduced by *this* prompt) and `abstracts.inherited` (declared in an ancestor and still unfilled here). When abstracts remain, `content` is the merged (pre-interpolation) namespace so the reader can see where the holes sit. |
+| `tree`     | Always works. Each prompt node is annotated with `[abstracts: a, b, c]` listing what markers it introduces; the JSON/YAML envelope adds `abstracts` to each node.                                                                  |
+
 ## Merge Semantics
 
 Reachable prompts are layered by breadth-first search distance from the root (distance 0 = root, wins everything). Ties at the same distance break by enqueue order.
@@ -229,6 +273,7 @@ For the full interpolation reference (structural vs. textual placeholders, list 
 | `12` | Cycle detected (ancestor or resource graph)     |
 | `14` | Unresolvable placeholder                        |
 | `15` | Merge / interpolation type mismatch             |
+| `16` | Abstract placeholder unfilled (from `resolve`)  |
 | `20` | Network / registry error                        |
 | `21` | Cache error                                     |
 | `22` | Offline-mode violation                          |

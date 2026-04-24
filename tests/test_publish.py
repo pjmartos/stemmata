@@ -276,3 +276,79 @@ def test_publish_with_bom_crlf_still_runs_placeholder_checks(tmp_path):
         run_publish(_opts(tmp_path))
     codes = [e["code"] for e in ei.value.details["errors"]]
     assert EXIT_UNRESOLVABLE in codes
+
+
+# --- Abstract placeholders ---
+
+
+def test_publish_succeeds_with_abstracts_and_records_them(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }, {
+        "prompts/base.yaml": "body: hello ${abstract:name}\n",
+    })
+    stderr = io.StringIO()
+    result = run_publish(_opts(tmp_path, stderr=stderr))
+    assert result.uploaded is False  # dry-run
+    assert [a["path"] for a in result.abstracts] == ["name"]
+    assert result.abstracts[0]["prompt"] == "@acme/p@1.0.0#base"
+    assert result.abstracts[0]["reason"] == "not_provided"
+    assert "unfilled abstract placeholder" in stderr.getvalue()
+    assert "@acme/p@1.0.0#base" in stderr.getvalue()
+
+
+def test_publish_skips_schema_when_abstracts_present(tmp_path):
+    schema_path = tmp_path / "s.json"
+    schema_path.write_text(json.dumps({
+        "type": "object",
+        "required": ["body"],
+        "properties": {"body": {"type": "string", "pattern": "^concrete "}},
+    }))
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }, {
+        # Violates the schema pattern at the raw level ("hello ..." != "concrete ..."),
+        # but we don't know the final value until the abstract is filled, so
+        # schema validation MUST be deferred — publish should succeed.
+        "prompts/base.yaml": f'$schema: "{schema_path.as_uri()}"\nbody: "hello ${{abstract:name}}"\n',
+    })
+    stderr = io.StringIO()
+    result = run_publish(_opts(tmp_path, stderr=stderr))
+    assert len(result.abstracts) == 1
+
+
+def test_publish_still_fails_on_real_unresolvable_alongside_abstracts(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }, {
+        "prompts/base.yaml": "body: ${abstract:name} and ${missing.var}\n",
+    })
+    with pytest.raises(AggregatedError) as ei:
+        run_publish(_opts(tmp_path))
+    assert ei.value.code == EXIT_UNRESOLVABLE
+    placeholders = [e for e in ei.value.details["errors"] if e["code"] == EXIT_UNRESOLVABLE]
+    assert any(e["details"]["placeholder"] == "missing.var" for e in placeholders)
+
+
+def test_publish_abstracts_across_multiple_prompts(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [
+            {"id": "a", "path": "prompts/a.yaml"},
+            {"id": "b", "path": "prompts/b.yaml"},
+        ],
+    }, {
+        "prompts/a.yaml": "body: ${abstract:thing}\n",
+        "prompts/b.yaml": "body: ${abstract:other}\n",
+    })
+    stderr = io.StringIO()
+    result = run_publish(_opts(tmp_path, stderr=stderr))
+    prompts_with_abstracts = {a["prompt"] for a in result.abstracts}
+    assert prompts_with_abstracts == {"@acme/p@1.0.0#a", "@acme/p@1.0.0#b"}

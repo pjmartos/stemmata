@@ -397,3 +397,109 @@ class TestDefaultOutput:
         out = cap.out.getvalue()
         assert not out.strip().startswith("{")
         assert "files_checked" in out
+
+
+# -- abstract placeholders --------------------------------------------------
+
+class TestAbstractPlaceholders:
+    def test_validate_permissive_on_abstracts(self, tmp_path):
+        uri = _schema(tmp_path, props={"name": {"type": "string", "pattern": "^concrete "}},
+                      required=["name"])
+        # The merged value "concrete ${abstract:x}" would fail the pattern after
+        # naive stringification, but because abstracts are unfilled the schema
+        # check must be deferred entirely — validate MUST succeed with exit 0.
+        _write(tmp_path / "a.yaml", f'$schema: "{uri}"\nname: "concrete ${{abstract:x}}"\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+        payload = json.loads(cap.out.getvalue())["result"]
+        assert payload["abstracts_found"] == 1
+        assert payload["abstracts"][0]["path"] == "x"
+
+    def test_validate_runs_schema_when_concrete(self, tmp_path):
+        uri = _schema(tmp_path, props={"name": {"type": "string", "pattern": "^concrete "}},
+                      required=["name"])
+        _write(tmp_path / "a.yaml", f'$schema: "{uri}"\nname: "not-concrete value"\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+
+    def test_validate_still_reports_real_placeholder_errors(self, tmp_path):
+        uri = _schema(tmp_path, props={"x": {"type": "string"}})
+        _write(tmp_path / "a.yaml",
+               f'$schema: "{uri}"\nx: "${{abstract:a}} and ${{missing}}"\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        # Real placeholder error beats schema-deferred abstracts.
+        assert code == 14  # EXIT_UNRESOLVABLE
+
+    def test_validate_surfaces_abstracts_count_in_payload(self, tmp_path):
+        uri = _schema(tmp_path, props={"x": {"type": "string"}})
+        _write(tmp_path / "a.yaml",
+               f'$schema: "{uri}"\nbody: |\n  ${{abstract:one}}\n  ${{abstract:two}}\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+        payload = json.loads(cap.out.getvalue())["result"]
+        paths = sorted(a["path"] for a in payload["abstracts"])
+        assert paths == ["one", "two"]
+
+    def test_validate_reports_abstracts_without_schema(self, tmp_path):
+        _write(tmp_path / "a.yaml",
+               'body: |\n  ${abstract:alpha}\n  ${abstract:beta}\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+        payload = json.loads(cap.out.getvalue())["result"]
+        assert payload["abstracts_found"] == 2
+        assert sorted(a["path"] for a in payload["abstracts"]) == ["alpha", "beta"]
+
+    def test_validate_reports_inherited_abstracts_without_schema(self, tmp_path):
+        _write(tmp_path / "base.yaml", 'greeting: "Hi ${abstract:who}."\n')
+        _write(tmp_path / "child.yaml", 'ancestors:\n  - "./base.yaml"\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "child.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+        payload = json.loads(cap.out.getvalue())["result"]
+        assert payload["abstracts_found"] == 1
+        assert payload["abstracts"][0]["path"] == "who"
+
+    def test_validate_json_reports_abstracts_without_schema(self, tmp_path):
+        _write(tmp_path / "a.json", json.dumps({"body": "${abstract:foo}"}))
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.json")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+        payload = json.loads(cap.out.getvalue())["result"]
+        assert payload["abstracts_found"] == 1
+        assert payload["abstracts"][0]["path"] == "foo"
+
+    def test_validate_multi_doc_abstracts_mixed_schema(self, tmp_path):
+        uri = _schema(tmp_path, props={"x": {"type": "integer"}})
+        _write(tmp_path / "m.yaml",
+               f'$schema: "{uri}"\nx: 1\n---\nbody: "${{abstract:here}}"\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "m.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+        payload = json.loads(cap.out.getvalue())["result"]
+        assert payload["abstracts_found"] == 1
+        entry = payload["abstracts"][0]
+        assert entry["path"] == "here"
+        assert entry["document"] == 2
+
+    def test_validate_no_schema_no_abstracts_swallows_resolver_errors(self, tmp_path):
+        _write(tmp_path / "a.yaml", 'ancestors:\n  - "./missing.yaml"\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK
+        payload = json.loads(cap.out.getvalue())["result"]
+        assert payload["violations_found"] == 0
+        assert payload["abstracts_found"] == 0

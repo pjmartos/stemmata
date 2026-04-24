@@ -1,0 +1,10 @@
+{
+  "name": "@stemmata/abstract-placeholders",
+  "version": "0.1.0",
+  "description": "Worked example of abstract placeholders in stemmata",
+  "license": "Apache-2.0",
+  "prompts": [
+    { "id": "persona-template", "path": "prompts/persona-template.yaml", "contentType": "yaml" },
+    { "id": "friendly-persona", "path": "prompts/friendly-persona.yaml", "contentType": "yaml" }
+  ]
+}

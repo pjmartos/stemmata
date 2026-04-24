@@ -4,7 +4,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from stemmata.errors import CycleError, MergeError, ReferenceError_, UnresolvableError
+from stemmata.errors import (
+    AbstractUnfilledError,
+    CycleError,
+    MergeError,
+    ReferenceError_,
+    UnresolvableError,
+)
 from stemmata.yaml_loader import scalar_meta
 
 
@@ -12,6 +18,7 @@ _PLACEHOLDER_RE = re.compile(r"\$\{(=)?([^{}]+)\}")
 _ESCAPE_TOKEN = "\x00PCLI_ESC_DOLLAR\x00"
 
 _RESOURCE_PREFIX = "resource:"
+_ABSTRACT_PREFIX = "abstract:"
 
 
 @dataclass
@@ -34,6 +41,20 @@ def _resource_body(inner: str) -> str | None:
     if not stripped.startswith(_RESOURCE_PREFIX):
         return None
     return stripped[len(_RESOURCE_PREFIX):].strip()
+
+
+def _abstract_body(inner: str) -> str | None:
+    stripped = inner.lstrip()
+    if not stripped.startswith(_ABSTRACT_PREFIX):
+        return None
+    return stripped[len(_ABSTRACT_PREFIX):].strip()
+
+
+def _is_abstract_marker_value(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    exact, _non_splat, inner = _exact_placeholder(value)
+    return bool(exact) and _abstract_body(inner) is not None
 
 
 def _resource_lookup(
@@ -138,42 +159,60 @@ def _is_scalar(v: Any) -> bool:
     return v is None or isinstance(v, (bool, int, float, str))
 
 
-def _parse_placeholder_tokens(text: str) -> list[tuple[str, str]]:
-    tokens: list[tuple[str, str]] = []
+def _parse_placeholder_tokens(text: str) -> list[tuple[str, str, int]]:
+    tokens: list[tuple[str, str, int]] = []
     i = 0
     while i < len(text):
+        start = i
         if text[i] == "$" and i + 1 < len(text) and text[i + 1] == "$":
             if i + 2 < len(text) and text[i + 2] == "{":
                 j = text.find("}", i + 3)
                 if j == -1:
-                    tokens.append(("text", text[i]))
+                    tokens.append(("text", text[i], start))
                     i += 1
                     continue
-                tokens.append(("escape", text[i + 2:j + 1]))
+                tokens.append(("escape", text[i + 2:j + 1], start))
                 i = j + 1
                 continue
-            tokens.append(("text", "$"))
+            tokens.append(("text", "$", start))
             i += 2
             continue
         if text[i] == "$" and i + 1 < len(text) and text[i + 1] == "{":
             j = text.find("}", i + 2)
             if j == -1:
-                tokens.append(("text", text[i]))
+                tokens.append(("text", text[i], start))
                 i += 1
                 continue
             inner = text[i + 2:j]
-            tokens.append(("ph", inner))
+            tokens.append(("ph", inner, start))
             i = j + 1
             continue
-        tokens.append(("text", text[i]))
+        tokens.append(("text", text[i], start))
         i += 1
-    merged: list[tuple[str, str]] = []
-    for kind, val in tokens:
+    merged: list[tuple[str, str, int]] = []
+    for kind, val, off in tokens:
         if merged and merged[-1][0] == "text" and kind == "text":
-            merged[-1] = ("text", merged[-1][1] + val)
+            merged[-1] = ("text", merged[-1][1] + val, merged[-1][2])
         else:
-            merged.append((kind, val))
+            merged.append((kind, val, off))
     return merged
+
+
+def _position_for_offset(
+    value: str,
+    offset: int,
+    meta_line: int | None,
+    meta_col: int | None,
+) -> tuple[int, int]:
+    line_off = value.count("\n", 0, offset)
+    col = offset - (value.rfind("\n", 0, offset) + 1)
+    base_line = meta_line or 1
+    if line_off == 0:
+        base_col = meta_col or 1
+        column = base_col + col
+    else:
+        column = col + 1
+    return base_line + line_off, column
 
 
 def _exact_placeholder(text: str) -> tuple[bool, bool, str]:
@@ -276,6 +315,34 @@ def _interp(
             body = _resource_body(inner_path)
             if body is not None:
                 return _resource_lookup(resources, file, body, line=line, column=column)
+            abstract_path = _abstract_body(inner_path)
+            if abstract_path is not None:
+                if not abstract_path:
+                    raise _err_unresolvable(
+                        "", file=file, line=line, column=column,
+                        reason="not_provided",
+                        searched=[layer.canonical_id for layer in layers],
+                        provider=None,
+                    )
+                value, status, _provider, searched = lookup_with_provenance(namespace, layers, abstract_path)
+                if status == "not_provided":
+                    raise AbstractUnfilledError(abstract_path, file=file, line=line, column=column, reason="not_provided", ancestors_searched=searched)
+                if status == "explicit_null":
+                    raise AbstractUnfilledError(abstract_path, file=file, line=line, column=column, reason="null_shadow", ancestors_searched=searched)
+                if _is_abstract_marker_value(value):
+                    raise AbstractUnfilledError(abstract_path, file=file, line=line, column=column, reason="abstract_inherited", ancestors_searched=searched)
+                resolved = _interp(
+                    value,
+                    namespace,
+                    layers,
+                    parent_is_list=False,
+                    root_file=root_file,
+                    visiting=visiting + (abstract_path,),
+                    resources=resources,
+                )
+                if parent_is_list and isinstance(resolved, list) and not non_splat:
+                    return _Splat(list(resolved))
+                return resolved
             path = inner_path.strip()
             if path in visiting:
                 _raise_cycle(list(visiting), path, file=file, line=line, column=column)
@@ -296,33 +363,69 @@ def _interp(
             if parent_is_list and isinstance(resolved, list) and not non_splat:
                 return _Splat(list(resolved))
             return resolved
-        tokens = _parse_placeholder_tokens(str(node))
-        has_placeholder = any(k == "ph" for k, _ in tokens)
-        has_escape = any(k == "escape" for k, _ in tokens)
+        text = str(node)
+        tokens = _parse_placeholder_tokens(text)
+        has_placeholder = any(k == "ph" for k, _v, _o in tokens)
+        has_escape = any(k == "escape" for k, _v, _o in tokens)
         if not has_placeholder and not has_escape:
             return node
         parts_out: list[str] = []
-        for kind, val in tokens:
+        for kind, val, offset in tokens:
             if kind == "text":
                 parts_out.append(val)
             elif kind == "escape":
                 parts_out.append("$" + val)
             else:
+                tok_line, tok_col = _position_for_offset(text, offset, line, column)
                 body = _resource_body(val)
                 if body is not None:
-                    parts_out.append(_resource_lookup(resources, file, body, line=line, column=column))
+                    parts_out.append(_resource_lookup(resources, file, body, line=tok_line, column=tok_col))
+                    continue
+                abstract_path = _abstract_body(val)
+                if abstract_path is not None:
+                    if not abstract_path:
+                        raise _err_unresolvable(
+                            "", file=file, line=tok_line, column=tok_col,
+                            reason="not_provided",
+                            searched=[layer.canonical_id for layer in layers],
+                            provider=None,
+                        )
+                    value, status, _provider, searched = lookup_with_provenance(namespace, layers, abstract_path)
+                    if status == "not_provided":
+                        raise AbstractUnfilledError(abstract_path, file=file, line=tok_line, column=tok_col, reason="not_provided", ancestors_searched=searched)
+                    if status == "explicit_null":
+                        raise AbstractUnfilledError(abstract_path, file=file, line=tok_line, column=tok_col, reason="null_shadow", ancestors_searched=searched)
+                    if _is_abstract_marker_value(value):
+                        raise AbstractUnfilledError(abstract_path, file=file, line=tok_line, column=tok_col, reason="abstract_inherited", ancestors_searched=searched)
+                    resolved = _interp(
+                        value,
+                        namespace,
+                        layers,
+                        parent_is_list=False,
+                        root_file=root_file,
+                        visiting=visiting + (abstract_path,),
+                        resources=resources,
+                    )
+                    if not _is_scalar(resolved):
+                        raise MergeError(
+                            path=abstract_path,
+                            conflict="non_scalar_abstract",
+                            types=[type(resolved).__name__],
+                            nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
+                        )
+                    parts_out.append(_stringify_scalar(resolved))
                     continue
                 inner = val
                 if inner.startswith("="):
                     inner = inner[1:]
                 inner = inner.strip()
                 if inner in visiting:
-                    _raise_cycle(list(visiting), inner, file=file, line=line, column=column)
+                    _raise_cycle(list(visiting), inner, file=file, line=tok_line, column=tok_col)
                 value, status, provider, searched = lookup_with_provenance(namespace, layers, inner)
                 if status == "not_provided":
-                    raise _err_unresolvable(inner, file=file, line=line, column=column, reason="not_provided", searched=searched, provider=None)
+                    raise _err_unresolvable(inner, file=file, line=tok_line, column=tok_col, reason="not_provided", searched=searched, provider=None)
                 if status == "explicit_null":
-                    raise _err_unresolvable(inner, file=file, line=line, column=column, reason="explicit_null", searched=searched, provider=provider)
+                    raise _err_unresolvable(inner, file=file, line=tok_line, column=tok_col, reason="explicit_null", searched=searched, provider=provider)
                 resolved = _interp(
                     value,
                     namespace,
@@ -337,8 +440,204 @@ def _interp(
                         path=inner,
                         conflict="non_scalar_in_textual",
                         types=[type(resolved).__name__],
-                        nodes=[{"file": file, "line": line, "column": column, "ancestor": root_file}],
+                        nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
                     )
                 parts_out.append(_stringify_scalar(resolved))
         return "".join(parts_out)
     return node
+
+
+@dataclass
+class AbstractRef:
+    path: str
+    file: str | None
+    line: int | None
+    column: int | None
+
+
+def _iter_abstract_in_scalar(
+    value: str, *, file_fallback: str | None, only_declarations: bool,
+) -> list[AbstractRef]:
+    out: list[AbstractRef] = []
+    meta_file, meta_line, meta_col, is_flow = scalar_meta(value)
+    src = meta_file or file_fallback
+    exact, _non_splat, inner = _exact_placeholder(value)
+    if exact and is_flow:
+        body = _abstract_body(inner)
+        if body is not None:
+            out.append(AbstractRef(path=body, file=src, line=meta_line, column=meta_col))
+        return out
+    if only_declarations:
+        return out
+    text = str(value)
+    for kind, val, offset in _parse_placeholder_tokens(text):
+        if kind != "ph":
+            continue
+        body = _abstract_body(val)
+        if body is not None:
+            tok_line, tok_col = _position_for_offset(text, offset, meta_line, meta_col)
+            out.append(AbstractRef(path=body, file=src, line=tok_line, column=tok_col))
+    return out
+
+
+def _walk_abstract_refs(
+    namespace: Any, *, file_fallback: str | None, only_declarations: bool,
+) -> list[AbstractRef]:
+    refs: list[AbstractRef] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for v in node.values():
+                _walk(v)
+            return
+        if isinstance(node, list):
+            for item in node:
+                _walk(item)
+            return
+        if isinstance(node, str):
+            refs.extend(_iter_abstract_in_scalar(
+                node, file_fallback=file_fallback, only_declarations=only_declarations,
+            ))
+
+    _walk(namespace)
+    return refs
+
+
+def scan_declared_abstracts(
+    namespace: Any, *, file_fallback: str | None = None,
+) -> list[AbstractRef]:
+    return _walk_abstract_refs(namespace, file_fallback=file_fallback, only_declarations=True)
+
+
+def scan_abstract_references(
+    namespace: Any, *, file_fallback: str | None = None,
+) -> list[AbstractRef]:
+    return _walk_abstract_refs(namespace, file_fallback=file_fallback, only_declarations=False)
+
+
+def _collect_from_inner(
+    inner: str,
+    namespace: Any,
+    layers: list[Layer],
+    *,
+    file: str | None,
+    line: int | None,
+    column: int | None,
+    root_file: str,
+    out: list[Any],
+) -> None:
+    abstract_path = _abstract_body(inner)
+    if abstract_path is not None:
+        if not abstract_path:
+            out.append(UnresolvableError(
+                "", file=file, line=line, column=column,
+                reason="not_provided",
+                ancestors_searched=[layer.canonical_id for layer in layers],
+                providing_ancestor=None,
+            ))
+            return
+        value, status, _provider, searched = lookup_with_provenance(namespace, layers, abstract_path)
+        if status == "not_provided":
+            out.append(AbstractUnfilledError(
+                abstract_path, file=file, line=line, column=column,
+                reason="not_provided", ancestors_searched=searched,
+            ))
+        elif status == "explicit_null":
+            out.append(AbstractUnfilledError(
+                abstract_path, file=file, line=line, column=column,
+                reason="null_shadow", ancestors_searched=searched,
+            ))
+        elif _is_abstract_marker_value(value):
+            out.append(AbstractUnfilledError(
+                abstract_path, file=file, line=line, column=column,
+                reason="abstract_inherited", ancestors_searched=searched,
+            ))
+        return
+    value, status, provider, searched = lookup_with_provenance(namespace, layers, inner)
+    if status == "not_provided":
+        out.append(UnresolvableError(
+            inner, file=file, line=line, column=column,
+            reason="not_provided", ancestors_searched=searched, providing_ancestor=None,
+        ))
+    elif status == "explicit_null":
+        out.append(UnresolvableError(
+            inner, file=file, line=line, column=column,
+            reason="explicit_null", ancestors_searched=searched, providing_ancestor=provider,
+        ))
+
+
+def collect_placeholder_errors(
+    node: Any,
+    namespace: Any,
+    layers: list[Layer],
+    *,
+    parent_is_list: bool,
+    root_file: str,
+    out: list[Any],
+) -> None:
+    if isinstance(node, dict):
+        for v in node.values():
+            collect_placeholder_errors(
+                v, namespace, layers,
+                parent_is_list=False, root_file=root_file, out=out,
+            )
+        return
+    if isinstance(node, list):
+        for item in node:
+            collect_placeholder_errors(
+                item, namespace, layers,
+                parent_is_list=True, root_file=root_file, out=out,
+            )
+        return
+    if not isinstance(node, str):
+        return
+
+    file, line, column, is_flow = scalar_meta(node)
+    file = file or root_file
+    exact, _non_splat, inner_path = _exact_placeholder(node)
+    if exact and is_flow:
+        if _resource_body(inner_path) is not None:
+            return
+        _collect_from_inner(
+            inner_path, namespace, layers,
+            file=file, line=line, column=column, root_file=root_file, out=out,
+        )
+        return
+
+    text = str(node)
+    tokens = _parse_placeholder_tokens(text)
+    for kind, val, offset in tokens:
+        if kind != "ph":
+            continue
+        if _resource_body(val) is not None:
+            continue
+        tok_line, tok_col = _position_for_offset(text, offset, line, column)
+        abstract_path = _abstract_body(val)
+        if abstract_path is not None:
+            _collect_from_inner(
+                val, namespace, layers,
+                file=file, line=tok_line, column=tok_col, root_file=root_file, out=out,
+            )
+            continue
+        inner = val
+        if inner.startswith("="):
+            inner = inner[1:]
+        inner = inner.strip()
+        value, status, provider, searched = lookup_with_provenance(namespace, layers, inner)
+        if status == "not_provided":
+            out.append(UnresolvableError(
+                inner, file=file, line=tok_line, column=tok_col,
+                reason="not_provided", ancestors_searched=searched, providing_ancestor=None,
+            ))
+        elif status == "explicit_null":
+            out.append(UnresolvableError(
+                inner, file=file, line=tok_line, column=tok_col,
+                reason="explicit_null", ancestors_searched=searched, providing_ancestor=provider,
+            ))
+        elif not _is_scalar(value):
+            out.append(MergeError(
+                path=inner,
+                conflict="non_scalar_in_textual",
+                types=[type(value).__name__],
+                nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
+            ))

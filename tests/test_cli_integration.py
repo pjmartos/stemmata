@@ -10,6 +10,7 @@ import pytest
 
 from stemmata.cli import run
 from stemmata.errors import (
+    EXIT_ABSTRACT_UNFILLED,
     EXIT_CYCLE,
     EXIT_GENERIC,
     EXIT_MERGE,
@@ -729,5 +730,285 @@ def test_describe_package_json_envelope(tmp_path, npmrc):
         assert [p["root"] for p in prompts] == ["@a/b@1.0.0#base", "@a/b@1.0.0#child"]
         assert prompts[0]["content"]["body"] == "base"
         assert prompts[1]["content"]["body"] == "child"
+    finally:
+        server.stop()
+
+
+# --- Abstract placeholders ---------------------------------------------------
+
+
+def test_resolve_exits_16_on_unfilled_abstract(tmp_path):
+    child = tmp_path / "x.yaml"
+    child.write_text("body: ${abstract:greeting}\n")
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_ABSTRACT_UNFILLED
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["code"] == 16
+    assert env["error"]["category"] == "abstract_unfilled"
+    assert env["error"]["details"]["placeholder"] == "greeting"
+    assert env["error"]["details"]["reason"] == "not_provided"
+
+
+def test_resolve_succeeds_when_abstract_filled_by_descendant(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text("greeting: ${abstract:greeting}\n")
+    child = tmp_path / "child.yaml"
+    child.write_text(
+        "ancestors:\n  - ./base.yaml\n"
+        "greeting: hello\n"
+        "body: ${greeting} world\n"
+    )
+    cap = _Capture()
+    code = run(["--cache-dir", str(tmp_path / "cache"), "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    assert "hello world" in cap.out.getvalue()
+
+
+def test_resolve_abstract_inherited_from_ancestor_fails(tmp_path):
+    # Ancestor declares the abstract; child inherits without filling it.
+    base = tmp_path / "base.yaml"
+    base.write_text("greeting: ${abstract:greeting}\n")
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\nbody: ${greeting}\n")
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_ABSTRACT_UNFILLED
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["details"]["reason"] == "abstract_inherited"
+
+
+def test_tree_text_annotates_abstract_holes(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text("greeting: ${abstract:greeting}\n")
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\nbody: x\n")
+    cap = _Capture()
+    code = run(["--cache-dir", str(tmp_path / "cache"), "tree", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    out = cap.out.getvalue()
+    assert "[abstracts: greeting]" in out
+
+
+def test_tree_json_includes_abstracts_per_node(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text("greeting: ${abstract:greeting}\nfarewell: ${abstract:farewell}\n")
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\nbody: x\n")
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "tree", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    env = json.loads(cap.out.getvalue())
+    by_id = {n["id"]: n for n in env["result"]["nodes"]}
+    base_real = str(base.resolve())
+    assert sorted(by_id[base_real]["abstracts"]) == ["farewell", "greeting"]
+    child_real = str(child.resolve())
+    assert by_id[child_real]["abstracts"] == []
+
+
+def test_describe_lists_declared_and_inherited_abstracts(tmp_path, npmrc):
+    # Package with a base prompt that declares abstracts and a child prompt
+    # that fills some but not all.
+    manifest = {
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [
+            {"id": "base", "path": "prompts/base.yaml"},
+            {"id": "child", "path": "prompts/child.yaml"},
+        ],
+    }
+    files = {
+        "prompts/base.yaml": (
+            b"greeting: ${abstract:greeting}\n"
+            b"farewell: ${abstract:farewell}\n"
+        ),
+        # child declares its OWN abstract on `nickname` and fills `greeting`
+        # but inherits `farewell` without filling.
+        "prompts/child.yaml": (
+            b"ancestors:\n  - ./base.yaml\n"
+            b"greeting: hi\n"
+            b"nickname: ${abstract:nickname}\n"
+        ),
+    }
+    tarballs = {("@a/b", "1.0.0"): _pack(manifest, files)}
+    server = _RegistryServer(tarballs)
+    server.start()
+    try:
+        rc = npmrc({"@a:registry": server.url})
+        cap = _Capture()
+        code = run([
+            "--output", "json",
+            "--npmrc", str(rc),
+            "--cache-dir", str(tmp_path / "cache"),
+            "describe", "@a/b@1.0.0#child",
+        ], stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+        env = json.loads(cap.out.getvalue())
+        prompts = env["result"]
+        assert len(prompts) == 1
+        abstr = prompts[0]["abstracts"]
+        assert sorted(r["path"] for r in abstr["declared"]) == ["nickname"]
+        assert sorted(r["path"] for r in abstr["inherited"]) == ["farewell"]
+    finally:
+        server.stop()
+
+
+def test_describe_yaml_emits_abstracts_comment_header(tmp_path, npmrc):
+    manifest = {
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }
+    files = {
+        "prompts/base.yaml": b"greeting: ${abstract:greeting}\nbody: x\n",
+    }
+    tarballs = {("@a/b", "1.0.0"): _pack(manifest, files)}
+    server = _RegistryServer(tarballs)
+    server.start()
+    try:
+        rc = npmrc({"@a:registry": server.url})
+        cap = _Capture()
+        code = run([
+            "--npmrc", str(rc),
+            "--cache-dir", str(tmp_path / "cache"),
+            "describe", "@a/b@1.0.0#base",
+        ], stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+        out = cap.out.getvalue()
+        assert "abstracts.declared: greeting" in out
+    finally:
+        server.stop()
+
+
+def test_describe_permissive_on_textual_only_abstract_usage(tmp_path, npmrc):
+    """Regression: a prompt whose abstracts appear only inside a block scalar
+    (no `x: ${abstract:x}` self-declaration) must still be describe-able —
+    describe MUST defer interpolation and surface the holes as declared."""
+    manifest = {
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [{"id": "tpl", "path": "prompts/tpl.yaml"}],
+    }
+    files = {
+        # No structural `x: ${abstract:x}` anywhere — every marker is a
+        # textual usage inside a block scalar.
+        "prompts/tpl.yaml": (
+            b"body: |\n"
+            b"  Hi ${abstract:name}, welcome to ${abstract:place}.\n"
+        ),
+    }
+    tarballs = {("@a/b", "1.0.0"): _pack(manifest, files)}
+    server = _RegistryServer(tarballs)
+    server.start()
+    try:
+        rc = npmrc({"@a:registry": server.url})
+        cap = _Capture()
+        code = run([
+            "--output", "json",
+            "--npmrc", str(rc),
+            "--cache-dir", str(tmp_path / "cache"),
+            "describe", "@a/b@1.0.0#tpl",
+        ], stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+        env = json.loads(cap.out.getvalue())
+        declared_paths = sorted(r["path"] for r in env["result"][0]["abstracts"]["declared"])
+        assert declared_paths == ["name", "place"]
+        # Content is the merged (pre-interpolation) namespace, so markers
+        # are still visible where the holes are.
+        assert "${abstract:name}" in env["result"][0]["content"]["body"]
+    finally:
+        server.stop()
+
+
+def test_describe_reports_inherited_not_declared_when_child_is_bare(tmp_path, npmrc):
+    """A child prompt that inherits from an abstract ancestor without filling
+    the holes must surface them as `inherited`, not `declared` — and it must
+    not fail."""
+    manifest = {
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [
+            {"id": "tpl", "path": "prompts/tpl.yaml"},
+            {"id": "bare", "path": "prompts/bare.yaml"},
+        ],
+    }
+    files = {
+        "prompts/tpl.yaml": (
+            b"body: |\n"
+            b"  Hi ${abstract:name}.\n"
+        ),
+        "prompts/bare.yaml": (
+            b"ancestors:\n  - ./tpl.yaml\n"
+        ),
+    }
+    tarballs = {("@a/b", "1.0.0"): _pack(manifest, files)}
+    server = _RegistryServer(tarballs)
+    server.start()
+    try:
+        rc = npmrc({"@a:registry": server.url})
+        cap = _Capture()
+        code = run([
+            "--output", "json",
+            "--npmrc", str(rc),
+            "--cache-dir", str(tmp_path / "cache"),
+            "describe", "@a/b@1.0.0#bare",
+        ], stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+        env = json.loads(cap.out.getvalue())
+        abstr = env["result"][0]["abstracts"]
+        assert [r["path"] for r in abstr["declared"]] == []
+        assert [r["path"] for r in abstr["inherited"]] == ["name"]
+    finally:
+        server.stop()
+
+
+def test_describe_clean_when_child_fills_textual_holes(tmp_path, npmrc):
+    """When a descendant fills every hole the ancestor uses textually, describe
+    MUST report no abstracts and interpolate normally."""
+    manifest = {
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [
+            {"id": "tpl", "path": "prompts/tpl.yaml"},
+            {"id": "concrete", "path": "prompts/concrete.yaml"},
+        ],
+    }
+    files = {
+        "prompts/tpl.yaml": (
+            b"body: |\n"
+            b"  Hi ${abstract:name}.\n"
+        ),
+        "prompts/concrete.yaml": (
+            b"ancestors:\n  - ./tpl.yaml\n"
+            b"name: Ada\n"
+        ),
+    }
+    tarballs = {("@a/b", "1.0.0"): _pack(manifest, files)}
+    server = _RegistryServer(tarballs)
+    server.start()
+    try:
+        rc = npmrc({"@a:registry": server.url})
+        cap = _Capture()
+        code = run([
+            "--output", "json",
+            "--npmrc", str(rc),
+            "--cache-dir", str(tmp_path / "cache"),
+            "describe", "@a/b@1.0.0#concrete",
+        ], stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+        env = json.loads(cap.out.getvalue())
+        item = env["result"][0]
+        assert item["abstracts"] == {"declared": [], "inherited": []}
+        # Fully interpolated — marker gone.
+        assert "${abstract:" not in item["content"]["body"]
+        assert "Hi Ada." in item["content"]["body"]
     finally:
         server.stop()
