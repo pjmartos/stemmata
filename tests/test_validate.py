@@ -369,6 +369,36 @@ class TestRelativePaths:
         assert code == EXIT_SCHEMA
 
 
+# -- unresolvable $schema ---------------------------------------------------
+
+class TestUnresolvableSchema:
+    def test_missing_relative_schema_reports_prompt_location(self, tmp_path):
+        prompt = tmp_path / "a.yaml"
+        _write(prompt, '$schema: "./does-not-exist.json"\nx: 1\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(prompt)],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+        errs = json.loads(cap.out.getvalue())["error"]["details"]["errors"]
+        assert len(errs) == 1
+        assert errs[0]["location"]["file"] == str(prompt)
+        assert errs[0]["details"]["reason"] == "schema_file_not_found"
+        assert errs[0]["details"]["field"] == "$schema"
+        assert "does-not-exist.json" in errs[0]["message"]
+
+    def test_missing_file_uri_schema_reports_prompt_location(self, tmp_path):
+        missing = (tmp_path / "nowhere.json").as_uri()
+        prompt = tmp_path / "a.yaml"
+        _write(prompt, f'$schema: "{missing}"\nx: 1\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(prompt)],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+        errs = json.loads(cap.out.getvalue())["error"]["details"]["errors"]
+        assert errs[0]["location"]["file"] == str(prompt)
+        assert errs[0]["details"]["reason"] == "schema_file_not_found"
+
+
 # -- CLI errors --------------------------------------------------------------
 
 class TestCliErrors:

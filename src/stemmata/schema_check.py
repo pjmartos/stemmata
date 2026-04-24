@@ -177,7 +177,12 @@ def validate_against_schema(
             reason="schema_fetch_failed",
         )]
     except SchemaError as e:
-        return [e]
+        return [SchemaError(
+            e.message,
+            file=file,
+            field_name=e.details.get("field") or "$schema",
+            reason=e.details.get("reason"),
+        )]
 
     try:
         validator = Draft202012Validator(schema)
