@@ -11,6 +11,7 @@ from stemmata.cli import run
 
 EXIT_OK = 0
 EXIT_SCHEMA = 10
+EXIT_REFERENCE = 11
 
 
 class _Capture:
@@ -23,6 +24,17 @@ def _write(p: Path, content: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return p
+
+
+def _collect_reasons(err: dict) -> set[str]:
+    out: set[str] = set()
+    details = err.get("details") or {}
+    if isinstance(details, dict):
+        if isinstance(details.get("reason"), str):
+            out.add(details["reason"])
+        for sub in details.get("errors", []) or []:
+            out |= _collect_reasons(sub)
+    return out
 
 
 def _schema(tmp: Path, props=None, required=None, name="schema.json"):
@@ -558,12 +570,54 @@ class TestAbstractPlaceholders:
         assert entry["path"] == "here"
         assert entry["document"] == 2
 
-    def test_validate_no_schema_no_abstracts_swallows_resolver_errors(self, tmp_path):
+    def test_validate_surfaces_resolver_errors_without_schema(self, tmp_path):
         _write(tmp_path / "a.yaml", 'ancestors:\n  - "./missing.yaml"\n')
         cap = _Capture()
         code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
                     stdout=cap.out, stderr=cap.err)
-        assert code == EXIT_OK
-        payload = json.loads(cap.out.getvalue())["result"]
-        assert payload["violations_found"] == 0
-        assert payload["abstracts_found"] == 0
+        assert code == EXIT_REFERENCE
+        env = json.loads(cap.out.getvalue())
+        assert env["error"]["category"] == "reference_error"
+
+    def test_validate_rejects_annotation_without_marker(self, tmp_path):
+        _write(
+            tmp_path / "a.yaml",
+            'abstracts:\n  shared:\n    description: x\n'
+            'body: hello\n',
+        )
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+        env = json.loads(cap.out.getvalue())
+        reasons = _collect_reasons(env["error"])
+        assert "annotation_without_declaration" in reasons
+
+    def test_validate_rejects_re_annotation_of_inherited_abstract(self, tmp_path):
+        _write(
+            tmp_path / "base.yaml",
+            'abstracts:\n  shared:\n    description: introduced here\n'
+            'value: "${abstract:shared}"\n',
+        )
+        _write(
+            tmp_path / "child.yaml",
+            'ancestors:\n  - "./base.yaml"\n'
+            'abstracts:\n  shared:\n    description: re-annotated\n',
+        )
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "child.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+        env = json.loads(cap.out.getvalue())
+        reasons = _collect_reasons(env["error"])
+        assert reasons & {"abstract_reannotation", "annotation_without_declaration"}
+
+    def test_validate_rejects_intra_doc_type_conflict_without_schema(self, tmp_path):
+        _write(tmp_path / "a.yaml", 'a: 1\na.b: 2\n')
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+        env = json.loads(cap.out.getvalue())
+        reasons = _collect_reasons(env["error"])
+        assert "intra_doc_type_conflict" in reasons

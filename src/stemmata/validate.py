@@ -187,10 +187,9 @@ def _validate_yaml_file(
             graph = resolve_graph(file_str, session)
             pipe = _resolve_pipeline(graph, session, schema_opts)
         except PromptCliError as e:
-            return 1, ([e] if has_schema else []), []
+            return 1, [e], []
         errors: list[PromptCliError] = list(pipe.abstract_errors)
-        if has_schema:
-            errors.extend(pipe.placeholder_errors)
+        errors.extend(pipe.placeholder_errors)
         abstracts_out = _abstracts_payload(file_str, pipe.abstracts, pipe.annotations)
         if not has_schema or pipe.resolved is None:
             return 1, errors, abstracts_out
@@ -217,9 +216,8 @@ def _validate_yaml_file(
             doc = parse_prompt(_dump_for_reparse(data), file=file_str,
                                strict=False, validate_paths=False)
         except PromptCliError as e:
-            if has_schema:
-                _tag_document(e, doc_idx)
-                all_errors.append(e)
+            _tag_document(e, doc_idx)
+            all_errors.append(e)
             continue
 
         position_ns = {k: v for k, v in data.items() if k not in RESERVED_KEYS}
@@ -228,18 +226,16 @@ def _validate_yaml_file(
             graph = resolve_from_document(doc, file_str, session)
             pipe = _resolve_pipeline(graph, session, schema_opts)
         except PromptCliError as e:
-            if has_schema:
-                _tag_document(e, doc_idx)
-                all_errors.append(e)
+            _tag_document(e, doc_idx)
+            all_errors.append(e)
             continue
 
         for e in pipe.abstract_errors:
             _tag_document(e, doc_idx)
             all_errors.append(e)
-        if has_schema:
-            for e in pipe.placeholder_errors:
-                _tag_document(e, doc_idx)
-                all_errors.append(e)
+        for e in pipe.placeholder_errors:
+            _tag_document(e, doc_idx)
+            all_errors.append(e)
         for a in _abstracts_payload(file_str, pipe.abstracts, pipe.annotations):
             a["document"] = doc_idx
             all_abstracts.append(a)
@@ -283,11 +279,10 @@ def _validate_json_file(
         graph = resolve_graph(file_str, session)
         pipe = _resolve_pipeline(graph, session, schema_opts)
     except PromptCliError as e:
-        return 1, ([e] if has_schema else []), []
+        return 1, [e], []
 
     errors: list[PromptCliError] = list(pipe.abstract_errors)
-    if has_schema:
-        errors.extend(pipe.placeholder_errors)
+    errors.extend(pipe.placeholder_errors)
     abstracts_out = _abstracts_payload(file_str, pipe.abstracts)
     if not has_schema or pipe.resolved is None:
         return 1, errors, abstracts_out
