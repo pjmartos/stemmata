@@ -1013,9 +1013,6 @@ def test_resolve_null_shadow_filled_descendant_still_resolves(tmp_path):
 
 
 def test_resolve_exit16_location_points_to_marker_not_annotation(tmp_path):
-    # The annotation block lives at lines 1-3; the body marker is on line 5.
-    # Per T22 / T31, the exit-16 envelope MUST locate the marker, not the
-    # annotation entry.
     prompt = tmp_path / "p.yaml"
     prompt.write_text(
         "abstracts:\n"            # line 1
@@ -1525,6 +1522,118 @@ def test_resolve_rejects_undocumented_abstract_with_exit_10(tmp_path):
     assert code == EXIT_SCHEMA
     env = json.loads(cap.out.getvalue())
     assert env["error"]["details"]["reason"] == "undocumented_abstract"
+
+
+def _envelope_reasons(env: dict) -> set:
+    err = env["error"]
+    details = err.get("details") or {}
+    if details.get("aggregated"):
+        return {sub["details"]["reason"] for sub in details["errors"]
+                if isinstance(sub.get("details"), dict) and "reason" in sub["details"]}
+    if "reason" in details:
+        return {details["reason"]}
+    return set()
+
+
+def test_resolve_re_annotation_classified_as_reannotation(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        'abstracts:\n  greeting:\n    description: introduced here\n'
+        'value: "${abstract:greeting}"\n'
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text(
+        'ancestors:\n  - "./base.yaml"\n'
+        'abstracts:\n  greeting:\n    description: re-annotated\n'
+        'greeting: "hello"\n'
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_SCHEMA
+    env = json.loads(cap.out.getvalue())
+    reasons = _envelope_reasons(env)
+    assert "abstract_reannotation" in reasons
+    assert "annotation_without_declaration" not in reasons
+
+
+def test_publish_re_annotation_classified_as_reannotation(tmp_path):
+    pkg = tmp_path / "pkg"
+    (pkg / "prompts").mkdir(parents=True)
+    (pkg / "package.json").write_text(json.dumps({
+        "name": "@test/reannot",
+        "version": "1.0.0",
+        "license": "Apache-2.0",
+        "prompts": [
+            {"id": "parent", "path": "prompts/parent.yaml", "contentType": "yaml"},
+            {"id": "child",  "path": "prompts/child.yaml",  "contentType": "yaml"},
+        ],
+    }))
+    (pkg / "prompts" / "parent.yaml").write_text(
+        'abstracts:\n  greeting:\n    description: introduced here\n'
+        'body: "${abstract:greeting}, world!"\n'
+    )
+    (pkg / "prompts" / "child.yaml").write_text(
+        'ancestors:\n  - "./parent.yaml"\n'
+        'abstracts:\n  greeting:\n    description: re-annotated\n'
+        'greeting: "hello"\n'
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "publish", str(pkg), "--dry-run"],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_SCHEMA
+    env = json.loads(cap.out.getvalue())
+    reasons = _envelope_reasons(env)
+    assert "abstract_reannotation" in reasons
+    assert "annotation_without_declaration" not in reasons
+
+
+def test_resolve_orphan_annotation_with_ancestors_uses_graph_check(tmp_path):
+    (tmp_path / "base.yaml").write_text("value: 1\n")
+    child = tmp_path / "child.yaml"
+    child.write_text(
+        'ancestors:\n  - "./base.yaml"\n'
+        'abstracts:\n  ghost:\n    description: nobody declares this\n'
+        'body: hello\n'
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_SCHEMA
+    env = json.loads(cap.out.getvalue())
+    reasons = _envelope_reasons(env)
+    assert "annotation_without_declaration" in reasons
+    assert "abstract_reannotation" not in reasons
+
+
+def test_parse_orphan_annotation_no_ancestors_still_parse_time(tmp_path):
+    from stemmata.errors import SchemaError
+    from stemmata.prompt_doc import parse_prompt
+    text = (
+        "abstracts:\n"
+        "  ghost:\n"
+        "    description: orphan\n"
+        "body: hello\n"
+    )
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt(text, file="x.yaml")
+    assert exc.value.details["reason"] == "annotation_without_declaration"
+
+
+def test_parse_orphan_annotation_with_ancestors_defers_to_graph(tmp_path):
+    from stemmata.prompt_doc import parse_prompt
+    text = (
+        'ancestors:\n'
+        '  - "./somewhere.yaml"\n'
+        'abstracts:\n'
+        '  ghost:\n'
+        '    description: maybe inherited\n'
+        'body: hello\n'
+    )
+    doc = parse_prompt(text, file="x.yaml")
+    assert "ghost" in doc.abstracts
 
 
 def test_resolve_type_list_splat_when_filled(tmp_path):

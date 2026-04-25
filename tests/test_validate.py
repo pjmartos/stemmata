@@ -610,7 +610,64 @@ class TestAbstractPlaceholders:
         assert code == EXIT_SCHEMA
         env = json.loads(cap.out.getvalue())
         reasons = _collect_reasons(env["error"])
-        assert reasons & {"abstract_reannotation", "annotation_without_declaration"}
+        assert "abstract_reannotation" in reasons
+        assert "annotation_without_declaration" not in reasons
+
+    def test_validate_orphan_annotation_with_ancestors_uses_graph_check(self, tmp_path):
+        _write(tmp_path / "base.yaml", 'value: 1\n')
+        _write(
+            tmp_path / "child.yaml",
+            'ancestors:\n  - "./base.yaml"\n'
+            'abstracts:\n  ghost:\n    description: nobody declares this\n'
+            'body: hello\n',
+        )
+        cap = _Capture()
+        code = run(["--output", "json",
+                    "--cache-dir", str(tmp_path / "cache"),
+                    "validate", str(tmp_path / "child.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+        env = json.loads(cap.out.getvalue())
+        reasons = _collect_reasons(env["error"])
+        assert "annotation_without_declaration" in reasons
+        assert "abstract_reannotation" not in reasons
+
+    def test_validate_re_annotation_of_inherited_annotation_only(self, tmp_path):
+        _write(
+            tmp_path / "base.yaml",
+            'abstracts:\n  shared:\n    description: introduced here\n'
+            'value: "${abstract:shared}"\n',
+        )
+        _write(
+            tmp_path / "child.yaml",
+            'ancestors:\n  - "./base.yaml"\n'
+            'abstracts:\n  shared:\n    description: re-annotated\n'
+            'shared: "filled"\n',
+        )
+        cap = _Capture()
+        code = run(["--output", "json",
+                    "--cache-dir", str(tmp_path / "cache"),
+                    "validate", str(tmp_path / "child.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+        env = json.loads(cap.out.getvalue())
+        reasons = _collect_reasons(env["error"])
+        assert "abstract_reannotation" in reasons
+        assert "annotation_without_declaration" not in reasons
+
+    def test_validate_standalone_orphan_annotation_still_parse_time(self, tmp_path):
+        _write(
+            tmp_path / "p.yaml",
+            'abstracts:\n  ghost:\n    description: orphan\n'
+            'body: hello\n',
+        )
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(tmp_path / "p.yaml")],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA
+        env = json.loads(cap.out.getvalue())
+        reasons = _collect_reasons(env["error"])
+        assert "annotation_without_declaration" in reasons
 
     def test_validate_abstracts_file_is_absolute_for_relative_cli_path(self, tmp_path, monkeypatch):
         _write(

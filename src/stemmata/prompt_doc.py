@@ -375,7 +375,9 @@ def parse_prompt(text: str, *, file: str, strict: bool = True, validate_paths: b
     )
     _walk_validate_resource_positions(namespace, file_fallback=file)
     if abstracts:
-        _check_local_abstract_annotations(abstracts, namespace, file=file)
+        _check_local_abstract_annotations(
+            abstracts, namespace, file=file, has_ancestors=bool(ancestors),
+        )
     return PromptDocument(
         file=file,
         data=data,
@@ -391,6 +393,7 @@ def _check_local_abstract_annotations(
     namespace: dict[str, Any],
     *,
     file: str,
+    has_ancestors: bool,
 ) -> None:
     from stemmata.interp import scan_abstract_references
 
@@ -401,6 +404,8 @@ def _check_local_abstract_annotations(
     for path, ann in abstracts.items():
         path_refs = refs_by_path.get(path)
         if not path_refs:
+            if has_ancestors:
+                continue
             raise SchemaError(
                 f"'abstracts.{path}' annotates a path that the prompt body never declares "
                 f"(no ${{abstract:{path}}} marker found)",

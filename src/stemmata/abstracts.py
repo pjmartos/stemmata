@@ -68,6 +68,17 @@ def validate_abstract_coupling(graph) -> list[PromptCliError]:
                     field_name=f"abstracts.{path}",
                     reason="abstract_reannotation",
                 ))
+            elif path not in own_body:
+                ann = node.doc.abstracts[path]
+                errors.append(SchemaError(
+                    f"'abstracts.{path}' annotates a path that no prompt declares "
+                    f"(no ${{abstract:{path}}} marker found in this prompt or any ancestor)",
+                    file=node.file,
+                    line=ann.line,
+                    column=ann.column,
+                    field_name=f"abstracts.{path}",
+                    reason="annotation_without_declaration",
+                ))
 
         for path in sorted(own_body):
             if path in ancestor_body:
