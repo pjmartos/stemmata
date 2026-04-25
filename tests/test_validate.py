@@ -438,7 +438,12 @@ class TestAbstractPlaceholders:
         # The merged value "concrete ${abstract:x}" would fail the pattern after
         # naive stringification, but because abstracts are unfilled the schema
         # check must be deferred entirely — validate MUST succeed with exit 0.
-        _write(tmp_path / "a.yaml", f'$schema: "{uri}"\nname: "concrete ${{abstract:x}}"\n')
+        _write(
+            tmp_path / "a.yaml",
+            f'$schema: "{uri}"\n'
+            f'abstracts:\n  x:\n    description: filler\n'
+            f'name: "concrete ${{abstract:x}}"\n',
+        )
         cap = _Capture()
         code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
                     stdout=cap.out, stderr=cap.err)
@@ -458,8 +463,12 @@ class TestAbstractPlaceholders:
 
     def test_validate_still_reports_real_placeholder_errors(self, tmp_path):
         uri = _schema(tmp_path, props={"x": {"type": "string"}})
-        _write(tmp_path / "a.yaml",
-               f'$schema: "{uri}"\nx: "${{abstract:a}} and ${{missing}}"\n')
+        _write(
+            tmp_path / "a.yaml",
+            f'$schema: "{uri}"\n'
+            f'abstracts:\n  a:\n    description: filler\n'
+            f'x: "${{abstract:a}} and ${{missing}}"\n',
+        )
         cap = _Capture()
         code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
                     stdout=cap.out, stderr=cap.err)
@@ -468,8 +477,14 @@ class TestAbstractPlaceholders:
 
     def test_validate_surfaces_abstracts_count_in_payload(self, tmp_path):
         uri = _schema(tmp_path, props={"x": {"type": "string"}})
-        _write(tmp_path / "a.yaml",
-               f'$schema: "{uri}"\nbody: |\n  ${{abstract:one}}\n  ${{abstract:two}}\n')
+        _write(
+            tmp_path / "a.yaml",
+            f'$schema: "{uri}"\n'
+            f'abstracts:\n'
+            f'  one:\n    description: first\n'
+            f'  two:\n    description: second\n'
+            f'body: |\n  ${{abstract:one}}\n  ${{abstract:two}}\n',
+        )
         cap = _Capture()
         code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
                     stdout=cap.out, stderr=cap.err)
@@ -479,8 +494,13 @@ class TestAbstractPlaceholders:
         assert paths == ["one", "two"]
 
     def test_validate_reports_abstracts_without_schema(self, tmp_path):
-        _write(tmp_path / "a.yaml",
-               'body: |\n  ${abstract:alpha}\n  ${abstract:beta}\n')
+        _write(
+            tmp_path / "a.yaml",
+            'abstracts:\n'
+            '  alpha:\n    description: first\n'
+            '  beta:\n    description: second\n'
+            'body: |\n  ${abstract:alpha}\n  ${abstract:beta}\n',
+        )
         cap = _Capture()
         code = run(["--output", "json", "validate", str(tmp_path / "a.yaml")],
                     stdout=cap.out, stderr=cap.err)
@@ -490,7 +510,11 @@ class TestAbstractPlaceholders:
         assert sorted(a["path"] for a in payload["abstracts"]) == ["alpha", "beta"]
 
     def test_validate_reports_inherited_abstracts_without_schema(self, tmp_path):
-        _write(tmp_path / "base.yaml", 'greeting: "Hi ${abstract:who}."\n')
+        _write(
+            tmp_path / "base.yaml",
+            'abstracts:\n  who:\n    description: addressee\n'
+            'greeting: "Hi ${abstract:who}."\n',
+        )
         _write(tmp_path / "child.yaml", 'ancestors:\n  - "./base.yaml"\n')
         cap = _Capture()
         code = run(["--output", "json", "validate", str(tmp_path / "child.yaml")],
@@ -501,7 +525,13 @@ class TestAbstractPlaceholders:
         assert payload["abstracts"][0]["path"] == "who"
 
     def test_validate_json_reports_abstracts_without_schema(self, tmp_path):
-        _write(tmp_path / "a.json", json.dumps({"body": "${abstract:foo}"}))
+        _write(
+            tmp_path / "a.json",
+            json.dumps({
+                "abstracts": {"foo": {"description": "filler"}},
+                "body": "${abstract:foo}",
+            }),
+        )
         cap = _Capture()
         code = run(["--output", "json", "validate", str(tmp_path / "a.json")],
                     stdout=cap.out, stderr=cap.err)
@@ -512,8 +542,12 @@ class TestAbstractPlaceholders:
 
     def test_validate_multi_doc_abstracts_mixed_schema(self, tmp_path):
         uri = _schema(tmp_path, props={"x": {"type": "integer"}})
-        _write(tmp_path / "m.yaml",
-               f'$schema: "{uri}"\nx: 1\n---\nbody: "${{abstract:here}}"\n')
+        _write(
+            tmp_path / "m.yaml",
+            f'$schema: "{uri}"\nx: 1\n---\n'
+            f'abstracts:\n  here:\n    description: filler\n'
+            f'body: "${{abstract:here}}"\n',
+        )
         cap = _Capture()
         code = run(["--output", "json", "validate", str(tmp_path / "m.yaml")],
                     stdout=cap.out, stderr=cap.err)

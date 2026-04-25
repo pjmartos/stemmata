@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from stemmata.abstracts import (
+    validate_abstract_coupling,
+    validate_schema_type_consistency,
+)
 from stemmata.bundle import (
     BundleMember,
     build_tarball,
@@ -34,7 +38,12 @@ from stemmata.npmrc import NpmConfig
 from stemmata.registry import RegistryClient
 from stemmata.resolver import Session, layer_order, resolve_graph
 from stemmata.resource_resolve import build_resource_binding
-from stemmata.schema_check import SchemaCheckOptions, resolve_schema_uri, validate_against_schema
+from stemmata.schema_check import (
+    SchemaCheckOptions,
+    fetch_schema,
+    resolve_schema_uri,
+    validate_against_schema,
+)
 
 
 @dataclass
@@ -105,6 +114,11 @@ def _check_one_prompt(
         errors.append(e)
         return errors, abstracts
 
+    coupling_errors = validate_abstract_coupling(graph)
+    if coupling_errors:
+        errors.extend(coupling_errors)
+        return errors, abstracts
+
     order = layer_order(graph)
     layers_data = [graph.nodes[nid].doc.namespace for nid in order]
     provenance = [(nid.canonical, graph.nodes[nid].file) for nid in order]
@@ -133,6 +147,15 @@ def _check_one_prompt(
     except PromptCliError as e:
         resource_errors.append(e)
     errors.extend(resource_errors)
+
+    for nid in graph.nodes:
+        doc = graph.nodes[nid].doc
+        if not doc.abstracts or not doc.schema_uri:
+            continue
+        doc_schema_uri = resolve_schema_uri(doc.schema_uri, doc.file)
+        doc_schema = fetch_schema(doc_schema_uri, schema_opts)
+        if doc_schema is not None:
+            errors.extend(validate_schema_type_consistency(doc, doc_schema))
 
     schema_uri = graph.nodes[graph.root_id].doc.schema_uri
     if schema_uri:

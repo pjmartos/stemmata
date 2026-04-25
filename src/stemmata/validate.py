@@ -7,6 +7,11 @@ from typing import Any
 
 import yaml
 
+from stemmata.abstracts import (
+    annotation_lookup,
+    validate_abstract_coupling,
+    validate_schema_type_consistency,
+)
 from stemmata.errors import AbstractUnfilledError, AggregatedError, PromptCliError, SchemaError
 from stemmata.interp import Layer, collect_placeholder_errors, interpolate
 from stemmata.merge import merge_namespaces
@@ -20,6 +25,7 @@ from stemmata.resolver import (
 from stemmata.resource_resolve import build_resource_binding
 from stemmata.schema_check import (
     SchemaCheckOptions,
+    fetch_schema,
     resolve_schema_uri,
     validate_against_schema,
 )
@@ -53,9 +59,11 @@ class _PipelineResult:
     position_ns: Any
     abstracts: list[AbstractUnfilledError] = field(default_factory=list)
     placeholder_errors: list[PromptCliError] = field(default_factory=list)
+    abstract_errors: list[PromptCliError] = field(default_factory=list)
+    annotations: dict[str, Any] = field(default_factory=dict)
 
 
-def _resolve_pipeline(graph, session) -> _PipelineResult:
+def _resolve_pipeline(graph, session, schema_opts: SchemaCheckOptions) -> _PipelineResult:
     order = layer_order(graph)
     layers_data = [graph.nodes[nid].doc.namespace for nid in order]
     provenance = [(nid.canonical, graph.nodes[nid].file) for nid in order]
@@ -64,6 +72,18 @@ def _resolve_pipeline(graph, session) -> _PipelineResult:
               for nid in order]
     root_file = graph.nodes[graph.root_id].file
     position_ns = graph.nodes[graph.root_id].doc.namespace
+
+    abstract_errors: list[PromptCliError] = list(validate_abstract_coupling(graph))
+    for nid in graph.nodes:
+        doc = graph.nodes[nid].doc
+        if not doc.abstracts or not doc.schema_uri:
+            continue
+        doc_schema_uri = resolve_schema_uri(doc.schema_uri, doc.file)
+        doc_schema = fetch_schema(doc_schema_uri, schema_opts)
+        if doc_schema is not None:
+            abstract_errors.extend(validate_schema_type_consistency(doc, doc_schema))
+
+    annotations = annotation_lookup([graph.nodes[nid].doc for nid in order])
 
     diagnostics: list[Any] = []
     collect_placeholder_errors(
@@ -75,28 +95,45 @@ def _resolve_pipeline(graph, session) -> _PipelineResult:
 
     resources = build_resource_binding(graph, session)
 
-    if abstracts or others:
+    if abstracts or others or abstract_errors:
         return _PipelineResult(
             resolved=None, position_ns=position_ns,
             abstracts=abstracts, placeholder_errors=others,
+            abstract_errors=abstract_errors, annotations=annotations,
         )
-    resolved = interpolate(merged, layers, root_file=root_file, resources=resources)
-    return _PipelineResult(resolved=resolved, position_ns=position_ns)
+    resolved = interpolate(
+        merged, layers, root_file=root_file, resources=resources,
+        annotations=annotations,
+    )
+    return _PipelineResult(
+        resolved=resolved, position_ns=position_ns, annotations=annotations,
+    )
 
 
 def _abstracts_payload(
-    file_str: str, abstracts: list[AbstractUnfilledError],
+    file_str: str,
+    abstracts: list[AbstractUnfilledError],
+    annotations: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    annotations = annotations or {}
     out: list[dict[str, Any]] = []
     for a in abstracts:
         loc = a.location if isinstance(a.location, dict) else {}
-        out.append({
+        path = a.details.get("placeholder")
+        entry: dict[str, Any] = {
             "file": file_str,
-            "path": a.details.get("placeholder"),
+            "path": path,
             "line": loc.get("line"),
             "column": loc.get("column"),
             "reason": a.details.get("reason"),
-        })
+        }
+        ann = annotations.get(path)
+        if ann is not None:
+            payload = {"description": ann.description, "type": ann.type}
+            if ann.has_example:
+                payload["example"] = ann.example
+            entry["annotation"] = payload
+        out.append(entry)
     return out
 
 
@@ -129,11 +166,13 @@ def _validate_yaml_file(
         try:
             session = session_factory()
             graph = resolve_graph(file_str, session)
-            pipe = _resolve_pipeline(graph, session)
+            pipe = _resolve_pipeline(graph, session, schema_opts)
         except PromptCliError as e:
             return 1, ([e] if has_schema else []), []
-        errors: list[PromptCliError] = list(pipe.placeholder_errors) if has_schema else []
-        abstracts_out = _abstracts_payload(file_str, pipe.abstracts)
+        errors: list[PromptCliError] = list(pipe.abstract_errors)
+        if has_schema:
+            errors.extend(pipe.placeholder_errors)
+        abstracts_out = _abstracts_payload(file_str, pipe.abstracts, pipe.annotations)
         if not has_schema or pipe.resolved is None:
             return 1, errors, abstracts_out
         schema_uri = resolve_schema_uri(raw_uri, file_str)
@@ -168,18 +207,21 @@ def _validate_yaml_file(
         try:
             session = session_factory()
             graph = resolve_from_document(doc, file_str, session)
-            pipe = _resolve_pipeline(graph, session)
+            pipe = _resolve_pipeline(graph, session, schema_opts)
         except PromptCliError as e:
             if has_schema:
                 _tag_document(e, doc_idx)
                 all_errors.append(e)
             continue
 
+        for e in pipe.abstract_errors:
+            _tag_document(e, doc_idx)
+            all_errors.append(e)
         if has_schema:
             for e in pipe.placeholder_errors:
                 _tag_document(e, doc_idx)
                 all_errors.append(e)
-        for a in _abstracts_payload(file_str, pipe.abstracts):
+        for a in _abstracts_payload(file_str, pipe.abstracts, pipe.annotations):
             a["document"] = doc_idx
             all_abstracts.append(a)
         if not has_schema or pipe.resolved is None:
@@ -220,11 +262,13 @@ def _validate_json_file(
     try:
         session = session_factory()
         graph = resolve_graph(file_str, session)
-        pipe = _resolve_pipeline(graph, session)
+        pipe = _resolve_pipeline(graph, session, schema_opts)
     except PromptCliError as e:
         return 1, ([e] if has_schema else []), []
 
-    errors: list[PromptCliError] = list(pipe.placeholder_errors) if has_schema else []
+    errors: list[PromptCliError] = list(pipe.abstract_errors)
+    if has_schema:
+        errors.extend(pipe.placeholder_errors)
     abstracts_out = _abstracts_payload(file_str, pipe.abstracts)
     if not has_schema or pipe.resolved is None:
         return 1, errors, abstracts_out

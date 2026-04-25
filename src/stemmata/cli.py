@@ -13,9 +13,15 @@ from typing import Any
 import yaml
 
 from stemmata import __version__
+from stemmata.abstracts import (
+    annotation_lookup,
+    validate_abstract_coupling,
+    validate_schema_type_consistency,
+)
 from stemmata.cache import Cache, default_cache_dir
 from stemmata.envelope import failure, success, to_json, to_text, to_yaml
 from stemmata.errors import (
+    AggregatedError,
     EXIT_GENERIC,
     EXIT_USAGE,
     GenericError,
@@ -35,10 +41,15 @@ from stemmata.manifest import is_scoped_name, is_semver
 from stemmata.merge import merge_namespaces
 from stemmata.npmrc import load_npmrc
 from stemmata.overrides import OVERRIDE_CANONICAL_ID, parse_set_flags
-from stemmata.prompt_doc import RESERVED_KEYS
+from stemmata.prompt_doc import AbstractAnnotation, RESERVED_KEYS
 from stemmata.registry import RegistryClient
 from stemmata.resolver import Session, layer_order, resolve_graph
 from stemmata.resource_resolve import build_resource_binding
+from stemmata.schema_check import (
+    SchemaCheckOptions,
+    fetch_schema,
+    resolve_schema_uri,
+)
 
 
 _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m|h)?$")
@@ -202,16 +213,75 @@ def _parse_package_coord(target: str) -> tuple[str, str, str | None]:
     return pkg, version, prompt_id
 
 
-def _ref_payload(ref: AbstractRef) -> dict[str, Any]:
-    return {"path": ref.path, "file": ref.file, "line": ref.line, "column": ref.column}
+def _ref_payload(ref: AbstractRef, annotation: AbstractAnnotation | None = None) -> dict[str, Any]:
+    base = {"path": ref.path, "file": ref.file, "line": ref.line, "column": ref.column}
+    if annotation is not None:
+        base["annotation"] = _annotation_payload(annotation)
+    return base
+
+
+def _annotation_payload(ann: AbstractAnnotation) -> dict[str, Any]:
+    payload: dict[str, Any] = {"description": ann.description, "type": ann.type}
+    if ann.has_example:
+        payload["example"] = ann.example
+    return payload
+
+
+def _unique_refs_for_comments(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for r in sorted(refs, key=lambda r: r.get("path") or ""):
+        path = r.get("path")
+        if path is None or path in seen:
+            continue
+        seen.add(path)
+        out.append(r)
+    return out
+
+
+def _schema_opts_from_args(args: argparse.Namespace, stderr) -> SchemaCheckOptions:
+    cache_root = Path(args.cache_dir) if getattr(args, "cache_dir", None) else default_cache_dir()
+    http_timeout = _parse_duration(getattr(args, "http_timeout", None) or "30s")
+    return SchemaCheckOptions(
+        offline=bool(getattr(args, "offline", False)),
+        refresh=bool(getattr(args, "refresh", False)),
+        http_timeout=http_timeout,
+        cache_root=cache_root,
+        stderr=stderr,
+    )
+
+
+def _gate_abstract_invariants(
+    graph,
+    schema_opts: SchemaCheckOptions | None,
+) -> list[PromptCliError]:
+    errors: list[PromptCliError] = list(validate_abstract_coupling(graph))
+    if schema_opts is not None:
+        for nid in graph.nodes:
+            doc = graph.nodes[nid].doc
+            if not doc.abstracts or not doc.schema_uri:
+                continue
+            doc_schema_uri = resolve_schema_uri(doc.schema_uri, doc.file)
+            doc_schema = fetch_schema(doc_schema_uri, schema_opts)
+            if doc_schema is not None:
+                errors.extend(validate_schema_type_consistency(doc, doc_schema))
+    return errors
 
 
 def _resolve_coord(
     pkg: str, version: str, prompt_id: str, session: Session,
+    schema_opts: SchemaCheckOptions | None = None,
 ) -> tuple[str, Any, list[dict[str, Any]], str, dict[str, list[dict[str, Any]]]]:
     session.version_overrides = {}
     target = f"{pkg}@{version}#{prompt_id}"
     graph = resolve_graph(target, session)
+
+    gate_errors = _gate_abstract_invariants(graph, schema_opts)
+    if gate_errors:
+        if len(gate_errors) == 1:
+            raise gate_errors[0]
+        raise AggregatedError(gate_errors, command="describe")
+
     order = layer_order(graph)
     layers_data = [graph.nodes[nid].doc.namespace for nid in order]
     provenance = [(nid.canonical, graph.nodes[nid].file) for nid in order]
@@ -219,6 +289,8 @@ def _resolve_coord(
     layers = [Layer(canonical_id=nid.canonical, data=graph.nodes[nid].doc.namespace) for nid in order]
     root_file = graph.nodes[graph.root_id].file
     resources = build_resource_binding(graph, session)
+
+    annotations = annotation_lookup([graph.nodes[nid].doc for nid in order])
 
     diagnostics: list[Any] = []
     collect_placeholder_errors(
@@ -254,7 +326,10 @@ def _resolve_coord(
     if unfilled_paths:
         content: Any = merged
     else:
-        content = interpolate(merged, layers, root_file=root_file, resources=resources)
+        content = interpolate(
+            merged, layers, root_file=root_file, resources=resources,
+            annotations=annotations,
+        )
 
     ancestors_payload = [
         {"canonical_id": nid.canonical, "distance": graph.distances[nid]}
@@ -262,8 +337,8 @@ def _resolve_coord(
         if nid != graph.root_id
     ]
     abstracts_payload = {
-        "declared": [_ref_payload(r) for r in declared_refs],
-        "inherited": [_ref_payload(r) for r in inherited_refs],
+        "declared": [_ref_payload(r, annotations.get(r.path)) for r in declared_refs],
+        "inherited": [_ref_payload(r, annotations.get(r.path)) for r in inherited_refs],
     }
     return graph.root_id.canonical, content, ancestors_payload, root_file, abstracts_payload
 
@@ -304,6 +379,13 @@ def _run_resolve(args: argparse.Namespace, stdout, stderr) -> int:
         if deadline_handler_installed:
             signal.setitimer(signal.ITIMER_REAL, 0)
 
+    schema_opts = _schema_opts_from_args(args, stderr)
+    gate_errors = _gate_abstract_invariants(graph, schema_opts)
+    if gate_errors:
+        if len(gate_errors) == 1:
+            raise gate_errors[0]
+        raise AggregatedError(gate_errors, command="resolve")
+
     order = layer_order(graph)
     layers_data = [graph.nodes[nid].doc.namespace for nid in order]
     provenance = [(nid.canonical, graph.nodes[nid].file) for nid in order]
@@ -314,9 +396,14 @@ def _run_resolve(args: argparse.Namespace, stdout, stderr) -> int:
         layers.insert(0, Layer(canonical_id=OVERRIDE_CANONICAL_ID, data=override_ns))
     merged = merge_namespaces(layers_data, provenance=provenance)
 
+    annotations = annotation_lookup([graph.nodes[nid].doc for nid in order])
+
     root_file = graph.nodes[graph.root_id].file
     resources = build_resource_binding(graph, session)
-    resolved = interpolate(merged, layers, root_file=root_file, resources=resources)
+    resolved = interpolate(
+        merged, layers, root_file=root_file, resources=resources,
+        annotations=annotations,
+    )
 
     out_mode = args.output or "yaml"
     if out_mode == "yaml":
@@ -346,17 +433,42 @@ def _label_for(canonical: str, kind: str) -> str:
     return f"resource:{canonical}" if kind == "resource" else canonical
 
 
-def _prompt_abstracts(graph) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
+def _prompt_abstracts(graph) -> dict[str, list[dict[str, Any]]]:
+    annotations_by_path: dict[str, AbstractAnnotation] = {}
+    for nid in graph.nodes:
+        for path, ann in graph.nodes[nid].doc.abstracts.items():
+            annotations_by_path[path] = ann
+
+    result: dict[str, list[dict[str, Any]]] = {}
     for nid in graph.nodes:
         refs = scan_abstract_references(
             graph.nodes[nid].doc.namespace,
             file_fallback=graph.nodes[nid].file,
         )
         paths = sorted({r.path for r in refs})
-        if paths:
-            result[nid.canonical] = paths
+        if not paths:
+            continue
+        entries: list[dict[str, Any]] = []
+        for path in paths:
+            entry: dict[str, Any] = {"path": path}
+            ann = annotations_by_path.get(path)
+            if ann is not None:
+                entry["annotation"] = _annotation_payload(ann)
+            entries.append(entry)
+        result[nid.canonical] = entries
     return result
+
+
+def _format_abstracts_label(entries: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for entry in entries:
+        path = entry["path"]
+        ann = entry.get("annotation")
+        if ann is not None:
+            parts.append(f"{path}: {ann.get('type', 'string')}")
+        else:
+            parts.append(path)
+    return f"[abstracts: {', '.join(parts)}]"
 
 
 def _render_tree(graph, resources=None) -> str:
@@ -382,7 +494,7 @@ def _render_tree(graph, resources=None) -> str:
     def labelled(canonical: str, kind: str) -> str:
         base = _label_for(canonical, kind)
         if kind == "prompt" and canonical in abstracts_by_prompt:
-            base += f"  [abstracts: {', '.join(abstracts_by_prompt[canonical])}]"
+            base += "  " + _format_abstracts_label(abstracts_by_prompt[canonical])
         return base
 
     root_canonical = graph.root_id.canonical
@@ -429,6 +541,8 @@ def _run_tree(args: argparse.Namespace, stdout, stderr) -> int:
         stderr=stderr,
     )
 
+    schema_opts = _schema_opts_from_args(args, stderr)
+
     deadline_handler_installed = False
     if overall_timeout > 0 and hasattr(signal, "SIGALRM"):
         def _timeout(_signum, _frame):
@@ -442,6 +556,12 @@ def _run_tree(args: argparse.Namespace, stdout, stderr) -> int:
     finally:
         if deadline_handler_installed:
             signal.setitimer(signal.ITIMER_REAL, 0)
+
+    gate_errors = _gate_abstract_invariants(graph, schema_opts)
+    if gate_errors:
+        if len(gate_errors) == 1:
+            raise gate_errors[0]
+        raise AggregatedError(gate_errors, command="tree")
 
     out_mode = args.output or "text"
     if out_mode == "text":
@@ -527,6 +647,8 @@ def _run_describe(args: argparse.Namespace, stdout, stderr) -> int:
         stderr=stderr,
     )
 
+    schema_opts = _schema_opts_from_args(args, stderr)
+
     deadline_handler_installed = False
     if overall_timeout > 0 and hasattr(signal, "SIGALRM"):
         def _timeout(_signum, _frame):
@@ -552,7 +674,9 @@ def _run_describe(args: argparse.Namespace, stdout, stderr) -> int:
             target_ids = [p.id for p in manifest.prompts]
         resolved_docs: list[dict[str, Any]] = []
         for pid in target_ids:
-            canonical, content, ancestors, _, abstracts = _resolve_coord(pkg, version, pid, session)
+            canonical, content, ancestors, _, abstracts = _resolve_coord(
+                pkg, version, pid, session, schema_opts=schema_opts,
+            )
             resolved_docs.append({
                 "root": canonical,
                 "content": content,
@@ -575,6 +699,12 @@ def _run_describe(args: argparse.Namespace, stdout, stderr) -> int:
                 parts.append("# abstracts.declared: " + ", ".join(sorted({r["path"] for r in declared})) + "\n")
             if inherited:
                 parts.append("# abstracts.inherited: " + ", ".join(sorted({r["path"] for r in inherited})) + "\n")
+            for ref in _unique_refs_for_comments(declared + inherited):
+                ann = ref.get("annotation")
+                if ann is None:
+                    continue
+                first_line = (ann.get("description") or "").splitlines()[0] if ann.get("description") else ""
+                parts.append(f"# abstract {ref['path']} ({ann.get('type', 'string')}): {first_line}\n")
             parts.append(_deterministic_yaml_dump(d["content"]))
         stdout.write("".join(parts))
         return 0

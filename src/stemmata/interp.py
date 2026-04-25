@@ -236,6 +236,7 @@ def interpolate(
     *,
     root_file: str,
     resources: ResourceBinding | None = None,
+    annotations: dict[str, Any] | None = None,
 ) -> Any:
     namespace = tree
     return _interp(
@@ -246,6 +247,7 @@ def interpolate(
         root_file=root_file,
         visiting=(),
         resources=resources,
+        annotations=annotations or {},
     )
 
 
@@ -267,6 +269,45 @@ def _raise_cycle(chain: list[str], path: str, *, file: str | None, line: int | N
     )
 
 
+def _actual_json_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def _abstract_type_mismatch(
+    path: str,
+    *,
+    file: str | None,
+    line: int | None,
+    column: int | None,
+    declared: str,
+    actual: Any,
+    ancestors_searched: list[str],
+) -> AbstractUnfilledError:
+    err = AbstractUnfilledError(
+        path,
+        file=file,
+        line=line,
+        column=column,
+        reason="type_mismatch",
+        ancestors_searched=ancestors_searched,
+    )
+    err.details["declared_type"] = declared
+    err.details["actual_type"] = _actual_json_type(actual)
+    return err
+
+
 def _interp(
     node: Any,
     namespace: Any,
@@ -276,7 +317,9 @@ def _interp(
     root_file: str,
     visiting: tuple[str, ...],
     resources: ResourceBinding | None = None,
+    annotations: dict[str, Any] | None = None,
 ) -> Any:
+    annotations = annotations or {}
     if isinstance(node, dict):
         return {
             k: _interp(
@@ -287,6 +330,7 @@ def _interp(
                 root_file=root_file,
                 visiting=visiting,
                 resources=resources,
+                annotations=annotations,
             )
             for k, v in node.items()
         }
@@ -301,6 +345,7 @@ def _interp(
                 root_file=root_file,
                 visiting=visiting,
                 resources=resources,
+                annotations=annotations,
             )
             if isinstance(resolved, _Splat):
                 out.extend(resolved.items)
@@ -339,7 +384,22 @@ def _interp(
                     root_file=root_file,
                     visiting=visiting + (abstract_path,),
                     resources=resources,
+                    annotations=annotations,
                 )
+                ann = annotations.get(abstract_path)
+                declared_type = getattr(ann, "type", "string") if ann is not None else "string"
+                if declared_type == "list":
+                    if not isinstance(resolved, list):
+                        raise _abstract_type_mismatch(
+                            abstract_path, file=file, line=line, column=column,
+                            declared="list", actual=resolved, ancestors_searched=searched,
+                        )
+                else:
+                    if not _is_scalar(resolved):
+                        raise _abstract_type_mismatch(
+                            abstract_path, file=file, line=line, column=column,
+                            declared="string", actual=resolved, ancestors_searched=searched,
+                        )
                 if parent_is_list and isinstance(resolved, list) and not non_splat:
                     return _Splat(list(resolved))
                 return resolved
@@ -359,6 +419,7 @@ def _interp(
                 root_file=root_file,
                 visiting=visiting + (path,),
                 resources=resources,
+                annotations=annotations,
             )
             if parent_is_list and isinstance(resolved, list) and not non_splat:
                 return _Splat(list(resolved))
@@ -397,6 +458,13 @@ def _interp(
                         raise AbstractUnfilledError(abstract_path, file=file, line=tok_line, column=tok_col, reason="null_shadow", ancestors_searched=searched)
                     if _is_abstract_marker_value(value):
                         raise AbstractUnfilledError(abstract_path, file=file, line=tok_line, column=tok_col, reason="abstract_inherited", ancestors_searched=searched)
+                    ann = annotations.get(abstract_path)
+                    declared_type = getattr(ann, "type", "string") if ann is not None else "string"
+                    if declared_type == "list":
+                        raise _abstract_type_mismatch(
+                            abstract_path, file=file, line=tok_line, column=tok_col,
+                            declared="list", actual=value, ancestors_searched=searched,
+                        )
                     resolved = _interp(
                         value,
                         namespace,
@@ -405,6 +473,7 @@ def _interp(
                         root_file=root_file,
                         visiting=visiting + (abstract_path,),
                         resources=resources,
+                        annotations=annotations,
                     )
                     if not _is_scalar(resolved):
                         raise MergeError(
@@ -434,6 +503,7 @@ def _interp(
                     root_file=root_file,
                     visiting=visiting + (inner,),
                     resources=resources,
+                    annotations=annotations,
                 )
                 if not _is_scalar(resolved):
                     raise MergeError(
@@ -453,6 +523,7 @@ class AbstractRef:
     file: str | None
     line: int | None
     column: int | None
+    is_textual: bool = False
 
 
 def _iter_abstract_in_scalar(
@@ -465,7 +536,9 @@ def _iter_abstract_in_scalar(
     if exact and is_flow:
         body = _abstract_body(inner)
         if body is not None:
-            out.append(AbstractRef(path=body, file=src, line=meta_line, column=meta_col))
+            out.append(AbstractRef(
+                path=body, file=src, line=meta_line, column=meta_col, is_textual=False,
+            ))
         return out
     if only_declarations:
         return out
@@ -476,7 +549,9 @@ def _iter_abstract_in_scalar(
         body = _abstract_body(val)
         if body is not None:
             tok_line, tok_col = _position_for_offset(text, offset, meta_line, meta_col)
-            out.append(AbstractRef(path=body, file=src, line=tok_line, column=tok_col))
+            out.append(AbstractRef(
+                path=body, file=src, line=tok_line, column=tok_col, is_textual=True,
+            ))
     return out
 
 

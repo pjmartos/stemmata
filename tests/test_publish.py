@@ -287,7 +287,10 @@ def test_publish_succeeds_with_abstracts_and_records_them(tmp_path):
         "version": "1.0.0",
         "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
     }, {
-        "prompts/base.yaml": "body: hello ${abstract:name}\n",
+        "prompts/base.yaml": (
+            "abstracts:\n  name:\n    description: addressee\n"
+            "body: hello ${abstract:name}\n"
+        ),
     })
     stderr = io.StringIO()
     result = run_publish(_opts(tmp_path, stderr=stderr))
@@ -314,7 +317,11 @@ def test_publish_skips_schema_when_abstracts_present(tmp_path):
         # Violates the schema pattern at the raw level ("hello ..." != "concrete ..."),
         # but we don't know the final value until the abstract is filled, so
         # schema validation MUST be deferred — publish should succeed.
-        "prompts/base.yaml": f'$schema: "{schema_path.as_uri()}"\nbody: "hello ${{abstract:name}}"\n',
+        "prompts/base.yaml": (
+            f'$schema: "{schema_path.as_uri()}"\n'
+            'abstracts:\n  name:\n    description: addressee\n'
+            'body: "hello ${{abstract:name}}"\n'.replace("${{abstract:name}}", "${abstract:name}")
+        ),
     })
     stderr = io.StringIO()
     result = run_publish(_opts(tmp_path, stderr=stderr))
@@ -327,7 +334,10 @@ def test_publish_still_fails_on_real_unresolvable_alongside_abstracts(tmp_path):
         "version": "1.0.0",
         "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
     }, {
-        "prompts/base.yaml": "body: ${abstract:name} and ${missing.var}\n",
+        "prompts/base.yaml": (
+            "abstracts:\n  name:\n    description: addressee\n"
+            "body: ${abstract:name} and ${missing.var}\n"
+        ),
     })
     with pytest.raises(AggregatedError) as ei:
         run_publish(_opts(tmp_path))
@@ -345,8 +355,14 @@ def test_publish_abstracts_across_multiple_prompts(tmp_path):
             {"id": "b", "path": "prompts/b.yaml"},
         ],
     }, {
-        "prompts/a.yaml": "body: ${abstract:thing}\n",
-        "prompts/b.yaml": "body: ${abstract:other}\n",
+        "prompts/a.yaml": (
+            "abstracts:\n  thing:\n    description: a thing\n"
+            "body: ${abstract:thing}\n"
+        ),
+        "prompts/b.yaml": (
+            "abstracts:\n  other:\n    description: another thing\n"
+            "body: ${abstract:other}\n"
+        ),
     })
     stderr = io.StringIO()
     result = run_publish(_opts(tmp_path, stderr=stderr))

@@ -739,7 +739,12 @@ def test_describe_package_json_envelope(tmp_path, npmrc):
 
 def test_resolve_exits_16_on_unfilled_abstract(tmp_path):
     child = tmp_path / "x.yaml"
-    child.write_text("body: ${abstract:greeting}\n")
+    child.write_text(
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening line\n"
+        "body: ${abstract:greeting}\n"
+    )
     cap = _Capture()
     code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
                 "resolve", str(child)],
@@ -754,7 +759,12 @@ def test_resolve_exits_16_on_unfilled_abstract(tmp_path):
 
 def test_resolve_succeeds_when_abstract_filled_by_descendant(tmp_path):
     base = tmp_path / "base.yaml"
-    base.write_text("greeting: ${abstract:greeting}\n")
+    base.write_text(
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening line\n"
+        "greeting: ${abstract:greeting}\n"
+    )
     child = tmp_path / "child.yaml"
     child.write_text(
         "ancestors:\n  - ./base.yaml\n"
@@ -771,7 +781,12 @@ def test_resolve_succeeds_when_abstract_filled_by_descendant(tmp_path):
 def test_resolve_abstract_inherited_from_ancestor_fails(tmp_path):
     # Ancestor declares the abstract; child inherits without filling it.
     base = tmp_path / "base.yaml"
-    base.write_text("greeting: ${abstract:greeting}\n")
+    base.write_text(
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening line\n"
+        "greeting: ${abstract:greeting}\n"
+    )
     child = tmp_path / "child.yaml"
     child.write_text("ancestors:\n  - ./base.yaml\nbody: ${greeting}\n")
     cap = _Capture()
@@ -785,7 +800,12 @@ def test_resolve_abstract_inherited_from_ancestor_fails(tmp_path):
 
 def test_tree_text_annotates_abstract_holes(tmp_path):
     base = tmp_path / "base.yaml"
-    base.write_text("greeting: ${abstract:greeting}\n")
+    base.write_text(
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening line\n"
+        "greeting: ${abstract:greeting}\n"
+    )
     child = tmp_path / "child.yaml"
     child.write_text("ancestors:\n  - ./base.yaml\nbody: x\n")
     cap = _Capture()
@@ -793,12 +813,19 @@ def test_tree_text_annotates_abstract_holes(tmp_path):
                stdout=cap.out, stderr=cap.err)
     assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
     out = cap.out.getvalue()
-    assert "[abstracts: greeting]" in out
+    assert "[abstracts: greeting: string]" in out
 
 
 def test_tree_json_includes_abstracts_per_node(tmp_path):
     base = tmp_path / "base.yaml"
-    base.write_text("greeting: ${abstract:greeting}\nfarewell: ${abstract:farewell}\n")
+    base.write_text(
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening line\n"
+        "  farewell:\n"
+        "    description: closing line\n"
+        "greeting: ${abstract:greeting}\nfarewell: ${abstract:farewell}\n"
+    )
     child = tmp_path / "child.yaml"
     child.write_text("ancestors:\n  - ./base.yaml\nbody: x\n")
     cap = _Capture()
@@ -809,7 +836,8 @@ def test_tree_json_includes_abstracts_per_node(tmp_path):
     env = json.loads(cap.out.getvalue())
     by_id = {n["id"]: n for n in env["result"]["nodes"]}
     base_real = str(base.resolve())
-    assert sorted(by_id[base_real]["abstracts"]) == ["farewell", "greeting"]
+    base_paths = sorted(e["path"] for e in by_id[base_real]["abstracts"])
+    assert base_paths == ["farewell", "greeting"]
     child_real = str(child.resolve())
     assert by_id[child_real]["abstracts"] == []
 
@@ -827,6 +855,11 @@ def test_describe_lists_declared_and_inherited_abstracts(tmp_path, npmrc):
     }
     files = {
         "prompts/base.yaml": (
+            b"abstracts:\n"
+            b"  greeting:\n"
+            b"    description: opening line\n"
+            b"  farewell:\n"
+            b"    description: closing line\n"
             b"greeting: ${abstract:greeting}\n"
             b"farewell: ${abstract:farewell}\n"
         ),
@@ -834,6 +867,9 @@ def test_describe_lists_declared_and_inherited_abstracts(tmp_path, npmrc):
         # but inherits `farewell` without filling.
         "prompts/child.yaml": (
             b"ancestors:\n  - ./base.yaml\n"
+            b"abstracts:\n"
+            b"  nickname:\n"
+            b"    description: addressee's nickname\n"
             b"greeting: hi\n"
             b"nickname: ${abstract:nickname}\n"
         ),
@@ -868,7 +904,12 @@ def test_describe_yaml_emits_abstracts_comment_header(tmp_path, npmrc):
         "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
     }
     files = {
-        "prompts/base.yaml": b"greeting: ${abstract:greeting}\nbody: x\n",
+        "prompts/base.yaml": (
+            b"abstracts:\n"
+            b"  greeting:\n"
+            b"    description: opening line\n"
+            b"greeting: ${abstract:greeting}\nbody: x\n"
+        ),
     }
     tarballs = {("@a/b", "1.0.0"): _pack(manifest, files)}
     server = _RegistryServer(tarballs)
@@ -901,6 +942,11 @@ def test_describe_permissive_on_textual_only_abstract_usage(tmp_path, npmrc):
         # No structural `x: ${abstract:x}` anywhere — every marker is a
         # textual usage inside a block scalar.
         "prompts/tpl.yaml": (
+            b"abstracts:\n"
+            b"  name:\n"
+            b"    description: addressee\n"
+            b"  place:\n"
+            b"    description: destination\n"
             b"body: |\n"
             b"  Hi ${abstract:name}, welcome to ${abstract:place}.\n"
         ),
@@ -942,6 +988,9 @@ def test_describe_reports_inherited_not_declared_when_child_is_bare(tmp_path, np
     }
     files = {
         "prompts/tpl.yaml": (
+            b"abstracts:\n"
+            b"  name:\n"
+            b"    description: addressee\n"
             b"body: |\n"
             b"  Hi ${abstract:name}.\n"
         ),
@@ -983,6 +1032,9 @@ def test_describe_clean_when_child_fills_textual_holes(tmp_path, npmrc):
     }
     files = {
         "prompts/tpl.yaml": (
+            b"abstracts:\n"
+            b"  name:\n"
+            b"    description: addressee\n"
             b"body: |\n"
             b"  Hi ${abstract:name}.\n"
         ),
@@ -1012,3 +1064,229 @@ def test_describe_clean_when_child_fills_textual_holes(tmp_path, npmrc):
         assert "Hi Ada." in item["content"]["body"]
     finally:
         server.stop()
+
+
+# --- Abstract annotations ----------------------------------------
+
+
+def test_resolve_rejects_undocumented_abstract_with_exit_10(tmp_path):
+    """A prompt that introduces a marker without an abstracts entry is
+    malformed."""
+    f = tmp_path / "x.yaml"
+    f.write_text("body: ${abstract:foo}\n")
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(f)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_SCHEMA
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["details"]["reason"] == "undocumented_abstract"
+
+
+def test_resolve_type_list_splat_when_filled(tmp_path):
+    """A list-typed abstract resolved with a list value participates in
+    list splat at structural position."""
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "abstracts:\n"
+        "  steps:\n"
+        "    description: pipeline steps\n"
+        "    type: list\n"
+        "items:\n"
+        "  - ${abstract:steps}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text(
+        "ancestors:\n  - ./base.yaml\n"
+        "steps:\n  - load\n  - run\n  - save\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    env = json.loads(cap.out.getvalue())
+    assert env["result"]["content"]["items"] == ["load", "run", "save"]
+
+
+def test_resolve_type_list_with_non_list_value_is_type_mismatch(tmp_path):
+    """A list-typed abstract resolved with a string value MUST abort
+    exit 16 reason='type_mismatch'."""
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "abstracts:\n"
+        "  steps:\n"
+        "    description: pipeline steps\n"
+        "    type: list\n"
+        "value: ${abstract:steps}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text(
+        "ancestors:\n  - ./base.yaml\n"
+        "steps: just-a-string\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_ABSTRACT_UNFILLED
+    env = json.loads(cap.out.getvalue())
+    details = env["error"]["details"]
+    assert details["reason"] == "type_mismatch"
+    assert details["declared_type"] == "list"
+    assert details["actual_type"] == "string"
+
+
+def test_publish_rejects_schema_type_contradiction(tmp_path):
+    """At publish, a $schema constraint that contradicts the annotation type
+    fires gate 1 (exit 10 schema_type_mismatch)."""
+    schema = tmp_path / "s.json"
+    schema.write_text(json.dumps({
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+    }))
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "package.json").write_text(json.dumps({
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [{"id": "p", "path": "prompts/p.yaml"}],
+    }))
+    (pkg / "prompts").mkdir()
+    (pkg / "prompts" / "p.yaml").write_text(
+        f'$schema: "{schema.as_uri()}"\n'
+        f'abstracts:\n  name:\n    description: filler\n    type: list\n'
+        f'name: ${{abstract:name}}\n'
+    )
+    cap = _Capture()
+    code = run([
+        "--output", "json",
+        "--cache-dir", str(tmp_path / "cache"),
+        "publish", "--dry-run", str(pkg),
+    ], stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_SCHEMA, cap.out.getvalue()
+    env = json.loads(cap.out.getvalue())
+    errors = env["error"].get("details", {}).get("errors", [env["error"]])
+    assert any(
+        e.get("details", {}).get("reason") == "schema_type_mismatch"
+        for e in errors
+    )
+
+
+def test_describe_payload_carries_annotation(tmp_path, npmrc):
+    """Describe surfaces each declared/inherited abstract with its
+    originating declarer's annotation object verbatim."""
+    manifest = {
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }
+    files = {
+        "prompts/base.yaml": (
+            b"abstracts:\n"
+            b"  greeting:\n"
+            b"    description: opening line of the message\n"
+            b"  steps:\n"
+            b"    description: ordered subroutine names\n"
+            b"    type: list\n"
+            b"greeting: ${abstract:greeting}\n"
+            b"steps: ${abstract:steps}\n"
+        ),
+    }
+    tarballs = {("@a/b", "1.0.0"): _pack(manifest, files)}
+    server = _RegistryServer(tarballs)
+    server.start()
+    try:
+        rc = npmrc({"@a:registry": server.url})
+        cap = _Capture()
+        code = run([
+            "--output", "json",
+            "--npmrc", str(rc),
+            "--cache-dir", str(tmp_path / "cache"),
+            "describe", "@a/b@1.0.0#base",
+        ], stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+        env = json.loads(cap.out.getvalue())
+        declared = env["result"][0]["abstracts"]["declared"]
+        by_path = {entry["path"]: entry for entry in declared}
+        assert by_path["greeting"]["annotation"] == {
+            "description": "opening line of the message",
+            "type": "string",
+        }
+        assert by_path["steps"]["annotation"] == {
+            "description": "ordered subroutine names",
+            "type": "list",
+        }
+    finally:
+        server.stop()
+
+
+def test_describe_yaml_emits_per_abstract_comment_lines(tmp_path, npmrc):
+    """The default YAML output gains one `# abstract <path> (<type>): <desc>`
+    comment line per surfaced abstract."""
+    manifest = {
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }
+    files = {
+        "prompts/base.yaml": (
+            b"abstracts:\n"
+            b"  greeting:\n"
+            b"    description: opening line\n"
+            b"greeting: ${abstract:greeting}\n"
+        ),
+    }
+    tarballs = {("@a/b", "1.0.0"): _pack(manifest, files)}
+    server = _RegistryServer(tarballs)
+    server.start()
+    try:
+        rc = npmrc({"@a:registry": server.url})
+        cap = _Capture()
+        code = run([
+            "--npmrc", str(rc),
+            "--cache-dir", str(tmp_path / "cache"),
+            "describe", "@a/b@1.0.0#base",
+        ], stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+        out = cap.out.getvalue()
+        assert "# abstract greeting (string): opening line" in out
+    finally:
+        server.stop()
+
+
+def test_tree_text_label_includes_type(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "abstracts:\n"
+        "  steps:\n"
+        "    description: pipeline steps\n"
+        "    type: list\n"
+        "items:\n  - ${abstract:steps}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\n")
+    cap = _Capture()
+    code = run(["--cache-dir", str(tmp_path / "cache"), "tree", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    assert "[abstracts: steps: list]" in cap.out.getvalue()
+
+
+def test_validate_payload_includes_annotation(tmp_path):
+    f = tmp_path / "a.yaml"
+    f.write_text(
+        "abstracts:\n"
+        "  who:\n"
+        "    description: addressee of the greeting\n"
+        "greeting: ${abstract:who}\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "validate", str(f)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK
+    payload = json.loads(cap.out.getvalue())["result"]
+    assert payload["abstracts"][0]["annotation"] == {
+        "description": "addressee of the greeting",
+        "type": "string",
+    }

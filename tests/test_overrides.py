@@ -106,14 +106,22 @@ def test_set_wins_over_ancestor(tmp_path):
 
 
 def test_set_satisfies_abstract(tmp_path):
-    f = _write(tmp_path / "a.yaml", 'greeting: "Hi ${abstract:who}."\n')
+    f = _write(
+        tmp_path / "a.yaml",
+        'abstracts:\n  who:\n    description: addressee\n'
+        'greeting: "Hi ${abstract:who}."\n',
+    )
     code, cap = _resolve_json(f, "--set", "who=Ada")
     assert code == EXIT_OK
     assert _content(cap)["greeting"] == "Hi Ada."
 
 
 def test_set_can_fill_nested_abstract(tmp_path):
-    f = _write(tmp_path / "a.yaml", 'msg: "I am ${abstract:persona.name}"\n')
+    f = _write(
+        tmp_path / "a.yaml",
+        'abstracts:\n  persona.name:\n    description: addressee\n'
+        'msg: "I am ${abstract:persona.name}"\n',
+    )
     code, cap = _resolve_json(f, "--set", "persona.name=Ada")
     assert code == EXIT_OK
     assert _content(cap)["msg"] == "I am Ada"

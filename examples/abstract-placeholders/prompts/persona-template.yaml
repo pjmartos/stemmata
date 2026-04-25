@@ -10,6 +10,13 @@
 # cannot be `stemmata resolve`-d: that would exit 16 (abstract unfilled).
 # Any descendant that provides concrete values at these dotted paths
 # satisfies the contract and becomes resolvable.
+abstracts:
+  persona.name:
+    description: "A persona's name"
+  persona.role:
+    description: "A role that represents the persona"
+  persona.tone:
+    description: "The tone of the persona to portray"
 
 system_message: |
   You are ${abstract:persona.name}, a ${abstract:persona.role}.

@@ -265,3 +265,134 @@ def test_resource_non_empty_body_accepted():
 def test_resource_escaped_empty_body_not_rejected():
     doc = parse_prompt('body: "$${resource:}"\n', file="x.yaml")
     assert doc.namespace == {"body": "$${resource:}"}
+
+
+# -- abstract annotations -----------------------------------------
+
+
+def test_abstracts_block_basic_string_default():
+    text = (
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening line of the message\n"
+        "greeting: ${abstract:greeting}\n"
+    )
+    doc = parse_prompt(text, file="x.yaml")
+    assert "abstracts" not in doc.namespace
+    assert "greeting" in doc.abstracts
+    ann = doc.abstracts["greeting"]
+    assert ann.description == "opening line of the message"
+    assert ann.type == "string"
+    assert ann.has_example is False
+
+
+def test_abstracts_block_with_explicit_type_and_example():
+    text = (
+        "abstracts:\n"
+        "  steps:\n"
+        "    description: ordered list of subroutine names\n"
+        "    type: list\n"
+        "    example:\n"
+        "      - load\n"
+        "      - run\n"
+        "  body:\n"
+        "    description: free-form prose\n"
+        "    type: string\n"
+        "    example: hi there\n"
+        "steps: ${abstract:steps}\n"
+        "msg: ${abstract:body}\n"
+    )
+    doc = parse_prompt(text, file="x.yaml")
+    assert doc.abstracts["steps"].type == "list"
+    assert doc.abstracts["steps"].has_example is True
+    assert doc.abstracts["steps"].example == ["load", "run"]
+    assert doc.abstracts["body"].example == "hi there"
+
+
+def test_abstracts_block_must_be_mapping():
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt("abstracts:\n  - foo\n", file="x.yaml")
+    assert exc.value.details["reason"] == "invalid_abstracts"
+
+
+def test_abstracts_entry_must_be_mapping():
+    text = "abstracts:\n  greeting: just a string\n"
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt(text, file="x.yaml")
+    assert exc.value.details["reason"] == "invalid_abstract_annotation"
+
+
+def test_abstracts_entry_requires_description():
+    text = "abstracts:\n  greeting:\n    type: string\n"
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt(text, file="x.yaml")
+    assert exc.value.details["reason"] == "missing_description"
+
+
+def test_abstracts_entry_rejects_empty_description():
+    text = "abstracts:\n  greeting:\n    description: ''\n"
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt(text, file="x.yaml")
+    assert exc.value.details["reason"] == "empty_description"
+
+
+def test_abstracts_entry_rejects_unknown_field():
+    text = (
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: foo\n"
+        "    bogus: 1\n"
+    )
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt(text, file="x.yaml")
+    assert exc.value.details["reason"] == "unknown_annotation_field"
+
+
+def test_abstracts_entry_rejects_invalid_type():
+    text = (
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: foo\n"
+        "    type: object\n"
+    )
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt(text, file="x.yaml")
+    assert exc.value.details["reason"] == "invalid_annotation_type"
+
+
+def test_abstracts_annotation_without_body_marker_rejected():
+    text = (
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening line\n"
+        "body: hello\n"
+    )
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt(text, file="x.yaml")
+    assert exc.value.details["reason"] == "annotation_without_declaration"
+
+
+def test_abstracts_type_list_in_textual_position_rejected():
+    text = (
+        "abstracts:\n"
+        "  steps:\n"
+        "    description: list of steps\n"
+        "    type: list\n"
+        "body: 'pre ${abstract:steps} post'\n"
+    )
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt(text, file="x.yaml")
+    assert exc.value.details["reason"] == "list_abstract_in_textual_position"
+
+
+def test_abstracts_block_stripped_from_namespace():
+    text = (
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening\n"
+        "greeting: ${abstract:greeting}\n"
+        "other: 1\n"
+    )
+    doc = parse_prompt(text, file="x.yaml")
+    assert "abstracts" not in doc.namespace
+    assert doc.namespace == {"greeting": "${abstract:greeting}", "other": 1}

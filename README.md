@@ -208,13 +208,23 @@ Prompts may embed opaque Markdown payloads via `${resource:<POSIX-relative-path>
 
 ### Abstract placeholders
 
-An author can mark a dotted-path as a required "hole" that any descendant must fill before the graph becomes resolvable:
+An author can mark a dotted-path as a required "hole" that any descendant must fill before the graph becomes resolvable. **Every newly introduced abstract MUST be documented** in the prompt's top-level `abstracts:` block:
 
 ```yaml
 # @acme/prompts-core#persona (a reusable mid-graph prompt)
+abstracts:
+  persona.tone:
+    description: persona's conversational tone (e.g. "friendly", "formal")
+    type: string                           # default; may be omitted
+    example: friendly
+  persona.steps:
+    description: ordered subroutine names this persona executes
+    type: list
+
 persona:
   tone: "${abstract:persona.tone}"         # required: any descendant must set persona.tone
   greeting: "Hi — my tone is ${abstract:persona.tone}."
+  steps: "${abstract:persona.steps}"
 ```
 
 A descendant fills the hole by providing a concrete value at the same dotted path:
@@ -228,24 +238,34 @@ ancestors:
 
 persona:
   tone: "friendly"
+  steps: ["greet", "ask", "answer"]
 ```
+
+Annotation fields:
+
+- **`description`** (required, non-empty string). Human-readable prose describing the contract step. Surfaces in `describe`, `tree`, and `validate` output so downstream callers know what to provide.
+- **`type`** (optional, defaults to `"string"`). One of `"string"` or `"list"`. A `type: "list"` marker MUST appear in structural position only — embedding a list-typed marker inside a larger string scalar is a publish-time error.
+- **`example`** (optional, any). Informational value satisfying the declared type; not validated.
 
 Semantics:
 
 - **Syntax.** `${abstract:<dotted-path>}` — the prefix mirrors `${resource:…}` so dispatch is unambiguous and the form is JSON-safe.
-- **Usable positions.** An abstract marker stands in for a **string** value. It may appear as the sole content of any scalar (flow or block) or positionally inside a larger string scalar (`"prefix ${abstract:x} suffix"`). Map/list-shaped abstracts are not supported in v1.
+- **Usable positions.** A `string`-typed marker may appear as the sole content of any scalar (flow or block) or positionally inside a larger string scalar (`"prefix ${abstract:x} suffix"`). A `list`-typed marker may appear only in structural position; the resolved sequence then participates in list-splat rules.
 - **A hole is unfilled** iff, after BFS merge, the nearest value at the referenced dotted path is (a) absent, (b) explicit `null` (null shadowing does **not** satisfy an abstract), or (c) itself another `${abstract:…}` marker (an abstract does not satisfy another abstract). The per-case `reason` is reported in the error envelope as `not_provided`, `null_shadow`, or `abstract_inherited`.
+- **Type-shape gate.** When the resolved value's JSON type contradicts the annotation `type` (a `list`-typed marker resolved with a string, or vice versa), the resolve fails with exit `16` and `reason: "type_mismatch"`; the envelope carries `declared_type` and `actual_type`.
+- **`$schema` consistency.** When the introducing prompt also carries `$schema`, every subcommand that loads the prompt verifies that the schema's constraint at the abstract's dotted path is consistent with the annotation `type`; a contradiction is exit `10` (`reason: "schema_type_mismatch"`).
+- **Declaration coupling.** Annotations belong to the originating declarer: the prompt that first introduces a marker MUST annotate it; descendants that re-use the inherited marker MUST NOT re-annotate it.
 - **Per-prompt all-or-nothing validation.** For any given prompt, if its merged namespace has zero unfilled abstracts, placeholder interpolation and `$schema` content-contract validation run as normal. If one or more abstracts remain unfilled, both checks are deferred for that prompt — nothing about that prompt's content contract can be enforced until the contract is fulfilled.
 
 Subcommand behaviour:
 
-| Command    | Unfilled abstracts present                                                                                                                                                                                                                                                                                           |
-|------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `resolve`  | Hard-fails with exit `16`. The resolved artefact is not produced while any hole remains.                                                                                                                                                                                                                             |
-| `validate` | Does **not** fail. Structural checks and cycle detection still run. Abstracts are reported under `abstracts` in the success payload.                                                                                                                                                                                 |
-| `publish`  | Does **not** fail. A `warning:` line is logged to stderr listing the unfilled abstracts, and each one is recorded under `abstracts` in the success payload. Schema validation is deferred for any prompt that still has holes.                                                                                       |
-| `describe` | Always works. Emits two labelled buckets per prompt: `abstracts.declared` (markers introduced by *this* prompt) and `abstracts.inherited` (declared in an ancestor and still unfilled here). When abstracts remain, `content` is the merged (pre-interpolation) namespace so the reader can see where the holes sit. |
-| `tree`     | Always works. Each prompt node is annotated with `[abstracts: a, b, c]` listing what markers it introduces; the JSON/YAML envelope adds `abstracts` to each node.                                                                                                                                                    |
+| Command    | Unfilled abstracts present                                                                                                                                                                                                                                                                                                                                      |
+|------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `resolve`  | Hard-fails with exit `16`. The resolved artefact is not produced while any hole remains.                                                                                                                                                                                                                                                                        |
+| `validate` | Does **not** fail. Structural checks and cycle detection still run. Abstracts are reported under `abstracts` in the success payload, each entry carrying the originating declarer's `annotation`.                                                                                                                                                               |
+| `publish`  | Does **not** fail. A `warning:` line is logged to stderr listing the unfilled abstracts, and each one is recorded under `abstracts` in the success payload. Schema validation is deferred for any prompt that still has holes.                                                                                                                                  |
+| `describe` | Always works. Emits two labelled buckets per prompt: `abstracts.declared` (markers introduced by *this* prompt) and `abstracts.inherited` (declared in an ancestor and still unfilled here). Each entry carries the declarer's `annotation`. The default YAML output adds one `# abstract <path> (<type>): <description-first-line>` comment per surfaced hole. |
+| `tree`     | Always works. Each prompt node is annotated with `[abstracts: <path>: <type>, ...]` listing the markers it introduces with their declared type; the JSON/YAML envelope adds an `abstracts` array of `{path, annotation}` to each node.                                                                                                                          |
 
 ## Merge Semantics
 
@@ -268,20 +288,20 @@ For the full interpolation reference (structural vs. textual placeholders, list 
 
 ## Exit Codes
 
-| Code | Meaning                                         |
-|------|-------------------------------------------------|
-| `0`  | Success                                         |
-| `1`  | Generic / unexpected failure                    |
-| `2`  | Usage error                                     |
-| `10` | Schema validation error                         |
-| `11` | Unknown ancestor, prompt, or resource reference |
-| `12` | Cycle detected (ancestor or resource graph)     |
-| `14` | Unresolvable placeholder                        |
-| `15` | Merge / interpolation type mismatch             |
-| `16` | Abstract placeholder unfilled (from `resolve`)  |
-| `20` | Network / registry error                        |
-| `21` | Cache error                                     |
-| `22` | Offline-mode violation                          |
+| Code | Meaning                                                       |
+|------|---------------------------------------------------------------|
+| `0`  | Success                                                       |
+| `1`  | Generic / unexpected failure                                  |
+| `2`  | Usage error                                                   |
+| `10` | Schema validation error                                       |
+| `11` | Unknown ancestor, prompt, or resource reference               |
+| `12` | Cycle detected (ancestor or resource graph)                   |
+| `14` | Unresolvable placeholder                                      |
+| `15` | Merge / interpolation type mismatch                           |
+| `16` | Abstract placeholder unfilled or wrong-typed (from `resolve`) |
+| `20` | Network / registry error                                      |
+| `21` | Cache error                                                   |
+| `22` | Offline-mode violation                                        |
 
 On failure, stdout always carries a JSON error envelope with `{status, exit_code, command, error: {code, category, message, ...}}` regardless of `--output`. Stderr gets a single-line human summary.
 

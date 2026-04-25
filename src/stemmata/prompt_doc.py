@@ -15,7 +15,11 @@ from stemmata.yaml_loader import load_with_positions, scalar_meta
 _EMPTY_RESOURCE_RE = re.compile(r"\$\{resource:\s*\}")
 
 
-RESERVED_KEYS = {"ancestors", "$schema"}
+RESERVED_KEYS = {"ancestors", "$schema", "abstracts"}
+
+
+_ABSTRACT_TYPES = ("string", "list")
+_ANNOTATION_FIELDS = ("description", "type", "example")
 
 
 def _type_kind(v: Any) -> str:
@@ -122,6 +126,17 @@ class ResourceRefInPrompt:
 
 
 @dataclass
+class AbstractAnnotation:
+    path: str
+    description: str
+    type: str
+    example: Any = None
+    has_example: bool = False
+    line: int | None = None
+    column: int | None = None
+
+
+@dataclass
 class PromptDocument:
     file: str
     data: dict[str, Any]
@@ -129,6 +144,7 @@ class PromptDocument:
     schema_uri: str | None
     namespace: dict[str, Any] = field(default_factory=dict)
     resource_refs: list[ResourceRefInPrompt] = field(default_factory=list)
+    abstracts: dict[str, AbstractAnnotation] = field(default_factory=dict)
 
 
 def _validate_rel_path(raw: str, *, file: str, line: int | None, column: int | None) -> None:
@@ -347,18 +363,152 @@ def parse_prompt(text: str, *, file: str, strict: bool = True, validate_paths: b
             field_name="$schema",
             reason="invalid_schema",
         )
+    abstracts = _parse_abstracts_block(data.get("abstracts"), file=file)
     namespace = _expand_dotted_keys(
         {k: v for k, v in data.items() if k not in RESERVED_KEYS},
         file=file,
     )
     _walk_validate_resource_positions(namespace, file_fallback=file)
+    if abstracts:
+        _check_local_abstract_annotations(abstracts, namespace, file=file)
     return PromptDocument(
         file=file,
         data=data,
         ancestors=ancestors,
         schema_uri=schema_uri,
         namespace=namespace,
+        abstracts=abstracts,
     )
+
+
+def _check_local_abstract_annotations(
+    abstracts: dict[str, AbstractAnnotation],
+    namespace: dict[str, Any],
+    *,
+    file: str,
+) -> None:
+    from stemmata.interp import scan_abstract_references
+
+    refs = scan_abstract_references(namespace, file_fallback=file)
+    refs_by_path: dict[str, list[Any]] = {}
+    for r in refs:
+        refs_by_path.setdefault(r.path, []).append(r)
+    for path, ann in abstracts.items():
+        path_refs = refs_by_path.get(path)
+        if not path_refs:
+            raise SchemaError(
+                f"'abstracts.{path}' annotates a path that the prompt body never declares "
+                f"(no ${{abstract:{path}}} marker found)",
+                file=file,
+                line=ann.line,
+                column=ann.column,
+                field_name=f"abstracts.{path}",
+                reason="annotation_without_declaration",
+            )
+        if ann.type == "list":
+            for r in path_refs:
+                if getattr(r, "is_textual", False):
+                    raise SchemaError(
+                        f"${{abstract:{path}}} is annotated as type 'list' but appears "
+                        f"in textual position (inside a larger string scalar); "
+                        f"list-shaped abstracts must occupy a structural position",
+                        file=file,
+                        line=r.line,
+                        column=r.column,
+                        field_name=f"abstracts.{path}.type",
+                        reason="list_abstract_in_textual_position",
+                    )
+
+
+def _parse_abstracts_block(raw: Any, *, file: str) -> dict[str, AbstractAnnotation]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise SchemaError(
+            f"'abstracts' must be a mapping of dotted paths to annotation objects, got {type(raw).__name__}",
+            file=file,
+            field_name="abstracts",
+            reason="invalid_abstracts",
+        )
+    annotations: dict[str, AbstractAnnotation] = {}
+    for path, entry in raw.items():
+        if not isinstance(path, str) or not path.strip():
+            raise SchemaError(
+                f"'abstracts' keys must be non-empty dotted-path strings, got {path!r}",
+                file=file,
+                field_name="abstracts",
+                reason="invalid_abstract_path",
+            )
+        clean_path = str(path)
+        if any(not seg for seg in clean_path.split(".")):
+            raise SchemaError(
+                f"'abstracts' key {clean_path!r} has empty dotted segment(s)",
+                file=file,
+                field_name=f"abstracts.{clean_path}",
+                reason="invalid_abstract_path",
+            )
+        line = getattr(path, "_pcli_line", None)
+        column = getattr(path, "_pcli_column", None)
+        if not isinstance(entry, dict):
+            raise SchemaError(
+                f"'abstracts.{clean_path}' must be a mapping of annotation fields, got {type(entry).__name__}",
+                file=file,
+                line=line,
+                column=column,
+                field_name=f"abstracts.{clean_path}",
+                reason="invalid_abstract_annotation",
+            )
+        unknown = [k for k in entry if k not in _ANNOTATION_FIELDS]
+        if unknown:
+            raise SchemaError(
+                f"'abstracts.{clean_path}' has unknown field(s): {sorted(unknown)}",
+                file=file,
+                line=line,
+                column=column,
+                field_name=f"abstracts.{clean_path}",
+                reason="unknown_annotation_field",
+            )
+        if "description" not in entry:
+            raise SchemaError(
+                f"'abstracts.{clean_path}' is missing required field 'description'",
+                file=file,
+                line=line,
+                column=column,
+                field_name=f"abstracts.{clean_path}.description",
+                reason="missing_description",
+            )
+        description = entry["description"]
+        if not isinstance(description, str) or not description.strip():
+            raise SchemaError(
+                f"'abstracts.{clean_path}.description' must be a non-empty string",
+                file=file,
+                line=line,
+                column=column,
+                field_name=f"abstracts.{clean_path}.description",
+                reason="empty_description",
+            )
+        type_val = entry.get("type", "string") if "type" in entry else "string"
+        if not isinstance(type_val, str) or type_val not in _ABSTRACT_TYPES:
+            raise SchemaError(
+                f"'abstracts.{clean_path}.type' must be one of {list(_ABSTRACT_TYPES)}, got {type_val!r}",
+                file=file,
+                line=line,
+                column=column,
+                field_name=f"abstracts.{clean_path}.type",
+                reason="invalid_annotation_type",
+            )
+        has_example = "example" in entry
+        example = entry.get("example") if has_example else None
+        annotations[clean_path] = AbstractAnnotation(
+            path=clean_path,
+            description=str(description),
+            type=str(type_val),
+            example=example,
+            has_example=has_example,
+            line=line,
+            column=column,
+        )
+    return annotations
 
 
 def resolve_relative(referrer_file: str, raw_rel: str) -> str:

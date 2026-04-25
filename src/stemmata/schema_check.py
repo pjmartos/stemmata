@@ -103,6 +103,13 @@ def _fetch_schema(uri: str, opts: SchemaCheckOptions) -> dict[str, Any]:
     return schema
 
 
+def fetch_schema(uri: str, opts: SchemaCheckOptions) -> dict[str, Any] | None:
+    try:
+        return _fetch_schema(uri, opts)
+    except (NetworkError, OfflineError, SchemaError):
+        return None
+
+
 def _lookup_line(instance: Any, path_parts: list[str | int]) -> int | None:
     """Walk *instance* along *path_parts* and return the source line number.
 
