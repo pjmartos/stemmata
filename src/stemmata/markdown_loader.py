@@ -43,11 +43,6 @@ def _check_hygiene(raw_bytes: bytes | None, text: str, file: str) -> None:
             f"Markdown file {file} begins with a BOM",
             file=file, line=1, column=1, field_name="<bom>", reason="bom_present",
         )
-    if "\r" in text:
-        raise SchemaError(
-            f"Markdown file {file} contains CR/CRLF line endings",
-            file=file, line=None, column=None, field_name="<line-endings>", reason="crlf_present",
-        )
 
 
 def parse_markdown(text: str, *, file: str, strict: bool = True, raw_bytes: bytes | None = None) -> MarkdownDocument:
@@ -82,4 +77,5 @@ def parse_markdown(text: str, *, file: str, strict: bool = True, raw_bytes: byte
 def read_markdown(file_path: str, *, strict: bool = True) -> MarkdownDocument:
     with open(file_path, "rb") as fh:
         raw = fh.read()
-    return parse_markdown(raw.decode("utf-8"), file=file_path, strict=strict, raw_bytes=raw)
+    text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return parse_markdown(text, file=file_path, strict=strict, raw_bytes=raw)

@@ -91,16 +91,19 @@ def test_bom_rejected_in_strict_mode():
     assert ei.value.details["reason"] == "bom_present"
 
 
-def test_crlf_rejected_in_strict_mode():
-    raw = "# heading\r\nmore\r\n"
-    with pytest.raises(SchemaError) as ei:
-        parse_markdown(raw, file="x.md", strict=True)
-    assert ei.value.details["reason"] == "crlf_present"
+def test_strict_mode_accepts_crlf_per_prd_780(tmp_path):
+    p = tmp_path / "x.md"
+    p.write_bytes(b"# heading\r\n${resource:./other.md}\r\nmore\r\n")
+    from stemmata.markdown_loader import read_markdown
+    doc = read_markdown(str(p), strict=True)
+    assert "\r" not in doc.content
+    assert len(doc.references) == 1
+    assert doc.references[0].raw == "./other.md"
+    assert doc.references[0].line == 2
 
 
 def test_lax_mode_accepts_crlf():
     raw = "# heading\r\nmore\r\n"
-    # strict=False still scans for resource refs but skips hygiene checks.
     doc = parse_markdown(raw, file="x.md", strict=False)
     assert doc.references == []
 

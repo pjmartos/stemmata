@@ -25,9 +25,9 @@ def test_rejects_bom():
         safe_load_yaml("\ufefffoo: bar\n", file="x.yaml")
 
 
-def test_rejects_crlf():
-    with pytest.raises(SchemaError):
-        safe_load_yaml("foo: bar\r\n", file="x.yaml")
+def test_accepts_crlf_per_prd_780():
+    data = safe_load_yaml("foo: bar\r\n", file="x.yaml")
+    assert data == {"foo": "bar"}
 
 
 def test_yaml_error_raises_schema_error():

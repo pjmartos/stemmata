@@ -198,6 +198,33 @@ def test_resolve_merge_error_non_scalar_in_textual(tmp_path):
     assert code == EXIT_MERGE
 
 
+def test_resolve_local_crlf_yaml_and_markdown_tolerated(tmp_path):
+    pkg = tmp_path / "pkg"
+    (pkg / "prompts").mkdir(parents=True)
+    (pkg / "resources").mkdir(parents=True)
+    (pkg / "package.json").write_bytes(json.dumps({
+        "name": "@a/b",
+        "version": "1.0.0",
+        "prompts": [{"id": "p", "path": "prompts/p.yaml", "contentType": "yaml"}],
+        "resources": [{"id": "r", "path": "resources/r.md", "contentType": "markdown"}],
+    }).encode())
+    (pkg / "prompts" / "p.yaml").write_bytes(
+        b"body: |\r\n  ${resource:../resources/r.md}\r\n"
+    )
+    (pkg / "resources" / "r.md").write_bytes(b"crlf-bearing\r\nlines\r\n")
+    cap = _Capture()
+    code = run([
+        "--cache-dir", str(tmp_path / "cache"),
+        "--output", "json",
+        "resolve", str(pkg / "prompts" / "p.yaml"),
+    ], stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    env = json.loads(cap.out.getvalue())
+    content = env["result"]["content"]
+    assert "crlf-bearing" in content["body"]
+    assert "\r" not in content["body"]
+
+
 def test_resolve_registry_fetch_success(tmp_path, npmrc):
     manifest = {"name": "@a/b", "version": "1.0.0", "prompts": [{"id": "base", "path": "prompts/base.yaml"}]}
     tarballs = {("@a/b", "1.0.0"): _pack(manifest, {"prompts/base.yaml": b"vars:\n  x: 42\n"})}

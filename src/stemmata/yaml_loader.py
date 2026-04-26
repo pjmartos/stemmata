@@ -70,15 +70,6 @@ def _check_bom_and_crlf(text: str, file: str) -> None:
             field_name="<bom>",
             reason="bom_present",
         )
-    if "\r\n" in text or "\r" in text:
-        raise SchemaError(
-            f"YAML file {file} contains CR/CRLF line endings",
-            file=file,
-            line=None,
-            column=None,
-            field_name="<line-endings>",
-            reason="crlf_present",
-        )
 
 
 def safe_load_yaml(text: str, *, file: str, strict: bool = True) -> Any:
