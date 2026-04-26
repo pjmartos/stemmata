@@ -23,6 +23,16 @@ def _make_tarball(files: dict[str, bytes], *, mode: int = 0o644, extras: list[ta
     return buf.getvalue()
 
 
+def test_cache_init_wraps_oserror_into_cache_error(tmp_path):
+    blocker = tmp_path / "blocker"
+    blocker.write_bytes(b"")
+    with pytest.raises(CacheError) as ei:
+        Cache(root=blocker)
+    assert ei.value.code == 21
+    assert ei.value.details["cache_path"] == str(blocker)
+    assert "reason" in ei.value.details and ei.value.details["reason"]
+
+
 def test_install_tarball_basic(tmp_path):
     cache = Cache(root=tmp_path / "c")
     manifest = {"name": "@a/b", "version": "1.0.0", "prompts": [{"path": "prompts/x.yaml"}]}

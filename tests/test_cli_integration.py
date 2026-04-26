@@ -11,6 +11,7 @@ import pytest
 from stemmata.cli import run
 from stemmata.errors import (
     EXIT_ABSTRACT_UNFILLED,
+    EXIT_CACHE,
     EXIT_CYCLE,
     EXIT_GENERIC,
     EXIT_MERGE,
@@ -329,6 +330,21 @@ def test_cache_clear_empty(tmp_path):
     assert code == EXIT_OK
     env = json.loads(cap.out.getvalue())
     assert env["result"]["entries_removed"] == 0
+
+
+def test_cache_dir_pointing_at_regular_file_returns_cache_error(tmp_path):
+    blocker = tmp_path / "blocker"
+    blocker.write_bytes(b"")
+    cap = _Capture()
+    code = run(
+        ["--cache-dir", str(blocker), "--output", "json", "cache", "clear"],
+        stdout=cap.out, stderr=cap.err,
+    )
+    assert code == EXIT_CACHE, cap.out.getvalue() + cap.err.getvalue()
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["category"] == "cache_error"
+    assert env["error"]["details"]["cache_path"] == str(blocker)
+    assert env["error"]["details"]["reason"]
 
 
 def test_cache_clear_after_install(tmp_path):

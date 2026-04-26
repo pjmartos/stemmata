@@ -31,10 +31,16 @@ class Cache:
     root: Path
 
     def __post_init__(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        (self.root / "packages").mkdir(exist_ok=True)
-        (self.root / "locks").mkdir(exist_ok=True)
-        (self.root / "staging").mkdir(exist_ok=True)
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            (self.root / "packages").mkdir(exist_ok=True)
+            (self.root / "locks").mkdir(exist_ok=True)
+            (self.root / "staging").mkdir(exist_ok=True)
+        except OSError as e:
+            raise CacheError(
+                str(self.root),
+                f"cannot create cache directory ({type(e).__name__}: {e.strerror or e})",
+            ) from e
 
     def package_dir(self, name: str, version: str) -> Path:
         safe = _safe_dirname(name)
