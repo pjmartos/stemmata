@@ -110,6 +110,34 @@ def fetch_schema(uri: str, opts: SchemaCheckOptions) -> dict[str, Any] | None:
         return None
 
 
+def fetch_schema_with_errors(
+    schema_uri: str, opts: SchemaCheckOptions, *, file: str,
+) -> tuple[dict[str, Any] | None, list[PromptCliError]]:
+    try:
+        return _fetch_schema(schema_uri, opts), []
+    except OfflineError:
+        return None, [SchemaError(
+            f"--offline: cannot fetch $schema {schema_uri!r} and no cached copy is available",
+            file=file,
+            field_name="$schema",
+            reason="schema_unavailable_offline",
+        )]
+    except NetworkError as e:
+        return None, [SchemaError(
+            f"failed to fetch $schema {schema_uri!r}: {e.message}",
+            file=file,
+            field_name="$schema",
+            reason="schema_fetch_failed",
+        )]
+    except SchemaError as e:
+        return None, [SchemaError(
+            e.message,
+            file=file,
+            field_name=e.details.get("field") or "$schema",
+            reason=e.details.get("reason"),
+        )]
+
+
 def _lookup_line(instance: Any, path_parts: list[str | int]) -> int | None:
     """Walk *instance* along *path_parts* and return the source line number.
 
@@ -167,29 +195,9 @@ def validate_against_schema(
     (useful when *instance* has been through interpolation and lost the
     ``_ScalarStr`` wrappers — pass the pre-interpolation tree instead).
     """
-    try:
-        schema = _fetch_schema(schema_uri, opts)
-    except OfflineError:
-        return [SchemaError(
-            f"--offline: cannot fetch $schema {schema_uri!r} and no cached copy is available",
-            file=file,
-            field_name="$schema",
-            reason="schema_unavailable_offline",
-        )]
-    except NetworkError as e:
-        return [SchemaError(
-            f"failed to fetch $schema {schema_uri!r}: {e.message}",
-            file=file,
-            field_name="$schema",
-            reason="schema_fetch_failed",
-        )]
-    except SchemaError as e:
-        return [SchemaError(
-            e.message,
-            file=file,
-            field_name=e.details.get("field") or "$schema",
-            reason=e.details.get("reason"),
-        )]
+    schema, fetch_errors = fetch_schema_with_errors(schema_uri, opts, file=file)
+    if fetch_errors:
+        return fetch_errors
 
     try:
         validator = Draft202012Validator(schema)

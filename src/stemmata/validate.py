@@ -32,6 +32,7 @@ from stemmata.resource_resolve import build_resource_binding
 from stemmata.schema_check import (
     SchemaCheckOptions,
     fetch_schema,
+    fetch_schema_with_errors,
     resolve_schema_uri,
     validate_against_schema,
 )
@@ -191,9 +192,13 @@ def _validate_yaml_file(
         errors: list[PromptCliError] = list(pipe.abstract_errors)
         errors.extend(pipe.placeholder_errors)
         abstracts_out = _abstracts_payload(file_str, pipe.abstracts, pipe.annotations)
-        if not has_schema or pipe.resolved is None:
+        if not has_schema:
             return 1, errors, abstracts_out
         schema_uri = resolve_schema_uri(raw_uri, file_str)
+        if pipe.resolved is None:
+            _, fetch_errors = fetch_schema_with_errors(schema_uri, schema_opts, file=file_str)
+            errors.extend(fetch_errors)
+            return 1, errors, abstracts_out
         errors.extend(validate_against_schema(
             pipe.resolved, schema_uri, file=file_str, opts=schema_opts,
             position_instance=pipe.position_ns,
@@ -235,10 +240,16 @@ def _validate_yaml_file(
         for a in _abstracts_payload(file_str, pipe.abstracts, pipe.annotations):
             a["document"] = doc_idx
             all_abstracts.append(a)
-        if not has_schema or pipe.resolved is None:
+        if not has_schema:
             continue
 
         schema_uri = resolve_schema_uri(raw_uri, file_str)
+        if pipe.resolved is None:
+            _, fetch_errors = fetch_schema_with_errors(schema_uri, schema_opts, file=file_str)
+            for e in fetch_errors:
+                _tag_document(e, doc_idx)
+            all_errors.extend(fetch_errors)
+            continue
         errs = validate_against_schema(
             pipe.resolved, schema_uri, file=file_str, opts=schema_opts,
             position_instance=position_ns,
@@ -284,9 +295,13 @@ def _validate_json_file(
     errors: list[PromptCliError] = list(pipe.abstract_errors)
     errors.extend(pipe.placeholder_errors)
     abstracts_out = _abstracts_payload(file_str, pipe.abstracts)
-    if not has_schema or pipe.resolved is None:
+    if not has_schema:
         return 1, errors, abstracts_out
     schema_uri = resolve_schema_uri(raw_uri, file_str)
+    if pipe.resolved is None:
+        _, fetch_errors = fetch_schema_with_errors(schema_uri, schema_opts, file=file_str)
+        errors.extend(fetch_errors)
+        return 1, errors, abstracts_out
     errors.extend(validate_against_schema(
         pipe.resolved, schema_uri, file=file_str, opts=schema_opts,
         position_instance=pipe.position_ns,

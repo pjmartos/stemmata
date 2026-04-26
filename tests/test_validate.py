@@ -483,6 +483,60 @@ class TestUnresolvableSchema:
         assert errs[0]["location"]["file"] == str(prompt)
         assert errs[0]["details"]["reason"] == "schema_file_not_found"
 
+    def test_unfetchable_schema_surfaces_when_abstracts_unfilled(self, tmp_path):
+        prompt = tmp_path / "a.yaml"
+        _write(
+            prompt,
+            '$schema: "./missing.json"\n'
+            'abstracts:\n'
+            '  who:\n    description: addressee\n'
+            'greeting: ${abstract:who}\n',
+        )
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(prompt)],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA, cap.out.getvalue() + cap.err.getvalue()
+        errs = json.loads(cap.out.getvalue())["error"]["details"]["errors"]
+        reasons = {e["details"].get("reason") for e in errs}
+        assert "schema_file_not_found" in reasons, errs
+
+    def test_unfetchable_schema_surfaces_in_multidoc_with_abstracts(self, tmp_path):
+        prompt = tmp_path / "m.yaml"
+        _write(
+            prompt,
+            '$schema: "./missing.json"\n'
+            'abstracts:\n'
+            '  who:\n    description: addressee\n'
+            'greeting: ${abstract:who}\n'
+            '---\n'
+            'name: hello\n',
+        )
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(prompt)],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA, cap.out.getvalue() + cap.err.getvalue()
+        errs = json.loads(cap.out.getvalue())["error"]["details"]["errors"]
+        reasons = {e["details"].get("reason") for e in errs}
+        assert "schema_file_not_found" in reasons, errs
+
+    def test_unfetchable_schema_surfaces_for_json_with_abstracts(self, tmp_path):
+        prompt = tmp_path / "a.json"
+        _write(
+            prompt,
+            json.dumps({
+                "$schema": "./missing.json",
+                "abstracts": {"who": {"description": "addressee"}},
+                "greeting": "${abstract:who}",
+            }),
+        )
+        cap = _Capture()
+        code = run(["--output", "json", "validate", str(prompt)],
+                    stdout=cap.out, stderr=cap.err)
+        assert code == EXIT_SCHEMA, cap.out.getvalue() + cap.err.getvalue()
+        errs = json.loads(cap.out.getvalue())["error"]["details"]["errors"]
+        reasons = {e["details"].get("reason") for e in errs}
+        assert "schema_file_not_found" in reasons, errs
+
 
 # -- CLI errors --------------------------------------------------------------
 
