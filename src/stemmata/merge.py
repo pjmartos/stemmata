@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from stemmata.errors import MergeError
 
 
 _MISSING = object()
+_BARE_ABSTRACT_MARKER_RE = re.compile(r"^\s*\$\{\s*abstract:[^{}]+\}\s*$")
 
 
 def _type_kind(v: Any) -> str:
@@ -14,6 +16,10 @@ def _type_kind(v: Any) -> str:
     if isinstance(v, list):
         return "list"
     return "scalar"
+
+
+def _is_bare_abstract_marker(v: Any) -> bool:
+    return isinstance(v, str) and bool(_BARE_ABSTRACT_MARKER_RE.match(v))
 
 
 def merge_pair(nearer: Any, farther: Any, *, path: str = "") -> Any:
@@ -37,6 +43,12 @@ def merge_pair(nearer: Any, farther: Any, *, path: str = "") -> Any:
         nk = _type_kind(nearer)
         fk = _type_kind(farther)
         if nk != fk:
+            nearer_is_marker = _is_bare_abstract_marker(nearer)
+            farther_is_marker = _is_bare_abstract_marker(farther)
+            if nearer_is_marker and not farther_is_marker:
+                return farther
+            if farther_is_marker and not nearer_is_marker:
+                return nearer
             raise MergeError(
                 path=path,
                 conflict="type_mismatch",

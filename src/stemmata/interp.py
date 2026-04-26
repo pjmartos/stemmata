@@ -650,6 +650,38 @@ class DeclaredAbstract:
     file: str | None
     line: int | None
     column: int | None
+    annotation_type: str = "string"
+
+
+def validate_resolved_abstract_types(
+    resolved: Any,
+    declared: list[DeclaredAbstract],
+) -> list[Any]:
+    out: list[Any] = []
+    for d in declared:
+        parts = d.path.split(".")
+        cur: Any = resolved
+        found = True
+        for p in parts:
+            if not isinstance(cur, dict) or p not in cur:
+                found = False
+                break
+            cur = cur[p]
+        if not found:
+            continue
+        if d.annotation_type == "list":
+            if not isinstance(cur, list):
+                out.append(_abstract_type_mismatch(
+                    d.path, file=d.file, line=d.line, column=d.column,
+                    declared="list", actual=cur, ancestors_searched=[],
+                ))
+        else:
+            if not _is_scalar(cur):
+                out.append(_abstract_type_mismatch(
+                    d.path, file=d.file, line=d.line, column=d.column,
+                    declared="string", actual=cur, ancestors_searched=[],
+                ))
+    return out
 
 
 def collect_unfilled_declared_abstracts(

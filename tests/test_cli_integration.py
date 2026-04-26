@@ -1886,6 +1886,104 @@ def test_resolve_type_list_with_non_list_value_is_type_mismatch(tmp_path):
     assert details["actual_type"] == "string"
 
 
+def test_resolve_descendant_overrides_list_marker_with_scalar_exits_16(tmp_path):
+    parent = tmp_path / "parent.yaml"
+    parent.write_text(
+        "abstracts:\n"
+        "  items:\n"
+        "    description: pipeline items\n"
+        "    type: list\n"
+        "items: ${abstract:items}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text(
+        "ancestors:\n  - ./parent.yaml\n"
+        "items: 42\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_ABSTRACT_UNFILLED, cap.out.getvalue() + cap.err.getvalue()
+    env = json.loads(cap.out.getvalue())
+    details = env["error"]["details"]
+    assert details["reason"] == "type_mismatch"
+    assert details["declared_type"] == "list"
+    assert details["actual_type"] == "number"
+
+
+def test_resolve_descendant_fills_list_marker_with_list_succeeds(tmp_path):
+    parent = tmp_path / "parent.yaml"
+    parent.write_text(
+        "abstracts:\n"
+        "  items:\n"
+        "    description: pipeline items\n"
+        "    type: list\n"
+        "items: ${abstract:items}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text(
+        "ancestors:\n  - ./parent.yaml\n"
+        "items:\n  - a\n  - b\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    env = json.loads(cap.out.getvalue())
+    assert env["result"]["content"]["items"] == ["a", "b"]
+
+
+def test_resolve_descendant_overrides_string_marker_with_list_exits_16(tmp_path):
+    parent = tmp_path / "parent.yaml"
+    parent.write_text(
+        "abstracts:\n"
+        "  name:\n"
+        "    description: who\n"
+        "    type: string\n"
+        "name: ${abstract:name}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text(
+        "ancestors:\n  - ./parent.yaml\n"
+        "name:\n  - alice\n  - bob\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_ABSTRACT_UNFILLED, cap.out.getvalue() + cap.err.getvalue()
+    env = json.loads(cap.out.getvalue())
+    details = env["error"]["details"]
+    assert details["reason"] == "type_mismatch"
+    assert details["declared_type"] == "string"
+    assert details["actual_type"] == "array"
+
+
+def test_resolve_descendant_fills_string_marker_with_string_succeeds(tmp_path):
+    parent = tmp_path / "parent.yaml"
+    parent.write_text(
+        "abstracts:\n"
+        "  name:\n"
+        "    description: who\n"
+        "    type: string\n"
+        "name: ${abstract:name}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text(
+        "ancestors:\n  - ./parent.yaml\n"
+        "name: alice\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    env = json.loads(cap.out.getvalue())
+    assert env["result"]["content"]["name"] == "alice"
+
+
 def test_publish_rejects_schema_type_contradiction(tmp_path):
     """At publish, a $schema constraint that contradicts the annotation type
     fires gate 1 (exit 10 schema_type_mismatch)."""

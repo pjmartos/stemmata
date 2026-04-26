@@ -33,6 +33,7 @@ from stemmata.interp import (
     collect_placeholder_errors,
     collect_unfilled_declared_abstracts,
     interpolate,
+    validate_resolved_abstract_types,
 )
 from stemmata.manifest import Manifest, parse_manifest
 from stemmata.merge import merge_namespaces
@@ -144,7 +145,8 @@ def _check_one_prompt(
     }
     declared = [
         DeclaredAbstract(path=path, file=graph.nodes[nid].file,
-                         line=ann.line, column=ann.column)
+                         line=ann.line, column=ann.column,
+                         annotation_type=ann.type)
         for nid in graph.order
         for path, ann in graph.nodes[nid].doc.abstracts.items()
     ]
@@ -187,12 +189,23 @@ def _check_one_prompt(
             except PromptCliError as e:
                 errors.append(e)
                 schema_target = merged
+            else:
+                errors.extend(validate_resolved_abstract_types(schema_target, declared))
         errors.extend(validate_against_schema(
             schema_target, schema_uri,
             file=str(prompt_path),
             opts=schema_opts,
             position_instance=position_ns,
         ))
+    else:
+        if not (abstracts or placeholder_errors or resource_errors):
+            root_file = graph.nodes[graph.root_id].file
+            try:
+                resolved = interpolate(merged, layers, root_file=root_file, resources=resources)
+            except PromptCliError:
+                resolved = None
+            if resolved is not None:
+                errors.extend(validate_resolved_abstract_types(resolved, declared))
 
     return errors, abstracts
 

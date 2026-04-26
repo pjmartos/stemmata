@@ -19,6 +19,7 @@ from stemmata.interp import (
     collect_placeholder_errors,
     collect_unfilled_declared_abstracts,
     interpolate,
+    validate_resolved_abstract_types,
 )
 from stemmata.merge import merge_namespaces
 from stemmata.prompt_doc import RESERVED_KEYS, parse_prompt
@@ -103,7 +104,8 @@ def _resolve_pipeline(graph, session, schema_opts: SchemaCheckOptions) -> _Pipel
     }
     declared = [
         DeclaredAbstract(path=path, file=graph.nodes[nid].file,
-                         line=ann.line, column=ann.column)
+                         line=ann.line, column=ann.column,
+                         annotation_type=ann.type)
         for nid in graph.order
         for path, ann in graph.nodes[nid].doc.abstracts.items()
     ]
@@ -125,6 +127,13 @@ def _resolve_pipeline(graph, session, schema_opts: SchemaCheckOptions) -> _Pipel
         merged, layers, root_file=root_file, resources=resources,
         annotations=annotations,
     )
+    type_diags = validate_resolved_abstract_types(resolved, declared)
+    if type_diags:
+        return _PipelineResult(
+            resolved=None, position_ns=position_ns,
+            abstracts=[], placeholder_errors=type_diags,
+            abstract_errors=abstract_errors, annotations=annotations,
+        )
     return _PipelineResult(
         resolved=resolved, position_ns=position_ns, annotations=annotations,
     )

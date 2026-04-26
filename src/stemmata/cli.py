@@ -38,6 +38,7 @@ from stemmata.interp import (
     collect_unfilled_declared_abstracts,
     interpolate,
     scan_abstract_references,
+    validate_resolved_abstract_types,
 )
 from stemmata.manifest import is_scoped_name, is_semver
 from stemmata.merge import merge_namespaces
@@ -275,6 +276,7 @@ def _declared_abstracts(graph) -> list[DeclaredAbstract]:
                     file=ref.file or node.file,
                     line=ref.line,
                     column=ref.column,
+                    annotation_type=ann.type,
                 ))
             else:
                 out.append(DeclaredAbstract(
@@ -282,6 +284,7 @@ def _declared_abstracts(graph) -> list[DeclaredAbstract]:
                     file=node.file,
                     line=ann.line,
                     column=ann.column,
+                    annotation_type=ann.type,
                 ))
     return out
 
@@ -373,6 +376,11 @@ def _resolve_coord(
             merged, layers, root_file=root_file, resources=resources,
             annotations=annotations,
         )
+        type_diags = validate_resolved_abstract_types(content, _declared_abstracts(graph))
+        if type_diags:
+            if len(type_diags) == 1:
+                raise type_diags[0]
+            raise AggregatedError(type_diags, command="describe")
 
     ancestors_payload = [
         {"canonical_id": nid.canonical, "distance": graph.distances[nid]}
@@ -456,6 +464,12 @@ def _run_resolve(args: argparse.Namespace, stdout, stderr) -> int:
         merged, layers, root_file=root_file, resources=resources,
         annotations=annotations,
     )
+
+    type_diags = validate_resolved_abstract_types(resolved, declared)
+    if type_diags:
+        if len(type_diags) == 1:
+            raise type_diags[0]
+        raise AggregatedError(type_diags, command="resolve")
 
     out_mode = args.output or "yaml"
     if out_mode == "yaml":
