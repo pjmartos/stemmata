@@ -419,6 +419,45 @@ def test_no_subcommand_is_usage_error(tmp_path):
     assert code == EXIT_USAGE
 
 
+def test_unrecognized_global_flag_emits_json_envelope(tmp_path):
+    cap = _Capture()
+    code = run(["--bogus-flag"], stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_USAGE
+    assert cap.out.getvalue(), "expected JSON envelope on stdout, got empty"
+    env = json.loads(cap.out.getvalue())
+    assert env["status"] == "error"
+    assert env["exit_code"] == EXIT_USAGE
+    assert env["error"]["category"] == "usage_error"
+    details = env["error"]["details"]
+    assert "argument" in details
+    assert "reason" in details
+    assert "--bogus-flag" in details["reason"]
+
+
+def test_unrecognized_flag_with_json_output_still_emits_envelope(tmp_path):
+    cap = _Capture()
+    code = run(["--output", "json", "--bogus"], stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_USAGE
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["category"] == "usage_error"
+    assert "--bogus" in env["error"]["details"]["reason"]
+
+
+def test_invalid_subcommand_choice_emits_envelope(tmp_path):
+    cap = _Capture()
+    code = run(["cache", "foo"], stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_USAGE
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["category"] == "usage_error"
+    assert "foo" in env["error"]["details"]["reason"]
+
+
+def test_version_flag_still_exits_zero(tmp_path):
+    cap = _Capture()
+    code = run(["--version"], stdout=cap.out, stderr=cap.err)
+    assert code == 0
+
+
 def test_full_example(tmp_path):
     base = tmp_path / "base.yaml"
     base.write_text(

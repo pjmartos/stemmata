@@ -74,8 +74,13 @@ def _check_python_version() -> None:
         sys.exit(EXIT_GENERIC)
 
 
+class _StemmataArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise UsageError(message, argument=self.prog, reason=message)
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="stemmata")
+    parser = _StemmataArgumentParser(prog="stemmata")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--output", choices=["yaml", "json", "text"], default=None)
     parser.add_argument("--verbose", action="store_true", default=False)
@@ -937,14 +942,19 @@ def _run_cache_clear(args: argparse.Namespace, stdout, stderr) -> int:
 
 def run(argv: list[str] | None = None, *, stdout=None, stderr=None) -> int:
     _check_python_version()
+    stdout = stdout if stdout is not None else sys.stdout
+    stderr = stderr if stderr is not None else sys.stderr
     parser = _build_parser()
     try:
         args = parser.parse_args(argv)
+    except UsageError as err:
+        env = failure("?", err)
+        stdout.write(to_json(env))
+        if stderr is not None:
+            stderr.write(to_text(env) + "\n")
+        return err.code
     except SystemExit as e:
-        return EXIT_USAGE if e.code not in (0, None) else (e.code or 0)
-
-    stdout = stdout if stdout is not None else sys.stdout
-    stderr = stderr if stderr is not None else sys.stderr
+        return e.code or 0
 
     command_name = args.cmd or "?"
     try:
