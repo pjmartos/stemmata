@@ -160,7 +160,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _deterministic_yaml_dump(data: Any, *, explicit_start: bool = False) -> str:
     class _Dumper(yaml.SafeDumper):
-        pass
+        def choose_scalar_style(self) -> str:
+            # PyYAML's analyze_scalar() refuses block style (|) when a line has
+            # trailing whitespace or contains tabs, silently downgrading to a
+            # double-quoted scalar with \n escapes. That's unreadable for
+            # multi-line prompt content. PyYAML's loader *does* round-trip such
+            # block scalars correctly, so honouring the explicit | request is
+            # safe.
+            if self.event.style == "|" and "\n" in self.event.value:
+                return "|"
+            return super().choose_scalar_style()
 
     def _str_representer(dumper: yaml.Dumper, value: str) -> yaml.nodes.ScalarNode:
         if "\n" in value:

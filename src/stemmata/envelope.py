@@ -34,10 +34,26 @@ def failure(command: str, err: PromptCliError) -> dict[str, Any]:
     }
 
 
+class _EnvelopeDumper(yaml.SafeDumper):
+    def choose_scalar_style(self) -> str:
+        if self.event.style == "|" and "\n" in self.event.value:
+            return "|"
+        return super().choose_scalar_style()
+
+
+def _envelope_str_representer(dumper: yaml.Dumper, value: str) -> yaml.nodes.ScalarNode:
+    if "\n" in value:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value)
+
+
+_EnvelopeDumper.add_representer(str, _envelope_str_representer)
+
+
 def to_yaml(envelope: dict[str, Any]) -> str:
     return yaml.dump(
         envelope,
-        Dumper=yaml.SafeDumper,
+        Dumper=_EnvelopeDumper,
         default_flow_style=False,
         sort_keys=False,
         allow_unicode=True,
