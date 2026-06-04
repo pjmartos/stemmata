@@ -274,8 +274,8 @@ def run_publish(opts: PublishOptions) -> PublishResult:
         if (package_root / optional).is_file():
             extra_files.append(optional)
     yaml_paths = [entry.path for entry in manifest.prompts]
-    markdown_paths = [entry.path for entry in manifest.resources]
-    members = collect_members(package_root, extra_files, yaml_paths, markdown_paths)
+    resource_paths = [entry.path for entry in manifest.resources]
+    members = collect_members(package_root, extra_files, yaml_paths, resource_paths)
     tarball_bytes = build_tarball(members)
     integrity = integrity_sha512(tarball_bytes)
     shasum = shasum_sha1(tarball_bytes)

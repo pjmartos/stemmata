@@ -51,13 +51,14 @@ def collect_members(
     package_root: Path,
     extra_files: list[str],
     yaml_paths: list[str],
-    markdown_paths: list[str] | None = None,
+    resource_paths: list[str] | None = None,
 ) -> list[BundleMember]:
     """Collect tarball members from a publish source directory.
 
     ``yaml_paths`` are POSIX-relative paths to YAML/JSON prompt payload files
-    (subject to BOM/CRLF normalisation). ``markdown_paths`` are POSIX-relative
-    paths to Markdown resource payload files (same hygiene rules).
+    (subject to BOM/CRLF normalisation). ``resource_paths`` are POSIX-relative
+    paths to resource payload files (same hygiene rules); the declared
+    ``contentType`` may be any of the allowed resource types.
     ``extra_files`` are additional package-relative files to ship verbatim
     (e.g. ``package.json``, ``README.md``, ``LICENSE``).
     """
@@ -117,7 +118,7 @@ def collect_members(
 
     for rel in yaml_paths:
         _add_payload(rel, kind="prompt")
-    for rel in markdown_paths or []:
+    for rel in resource_paths or []:
         _add_payload(rel, kind="resource")
 
     members.sort(key=lambda m: m.arcname)

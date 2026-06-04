@@ -10,7 +10,7 @@ from pathlib import Path
 from stemmata.errors import CycleError, ReferenceError_, SchemaError
 from stemmata.interp import ResourceBinding
 from stemmata.manifest import Manifest, is_scoped_name, is_semver, parse_manifest
-from stemmata.markdown_loader import MarkdownDocument, read_markdown
+from stemmata.resource_loader import ResourceDocument, read_resource
 from stemmata.prompt_doc import collect_resource_refs
 
 
@@ -29,7 +29,7 @@ class ResourceCoord:
 class _ResourceNode:
     coord: ResourceCoord
     file_path: Path
-    doc: MarkdownDocument
+    doc: ResourceDocument
     children: list[str]
 
 
@@ -251,7 +251,7 @@ def build_resource_binding(graph, session) -> ResourceBinding:
                 searched_in=f"{coord.package}@{coord.version}",
                 reason="missing",
             )
-        doc = read_markdown(str(file_path), strict=getattr(session, "strict_parse", True))
+        doc = read_resource(str(file_path), strict=getattr(session, "strict_parse", True))
         manifest, pkg_root = session.ensure_package(coord.package, coord.version)
         entry = manifest.resource_by_id(coord.resource_id)
         entry_path = entry.path if entry is not None else None

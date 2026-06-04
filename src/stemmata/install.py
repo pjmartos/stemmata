@@ -103,8 +103,8 @@ def run_install(path: Path, *, cache: Cache, refresh: bool = False) -> InstallRe
         if (base / optional).is_file():
             extra_files.append(optional)
     yaml_paths = [e.path for e in manifest.prompts]
-    markdown_paths = [e.path for e in manifest.resources]
-    members = collect_members(base, extra_files, yaml_paths, markdown_paths)
+    resource_paths = [e.path for e in manifest.resources]
+    members = collect_members(base, extra_files, yaml_paths, resource_paths)
     tarball_bytes = build_tarball(members)
 
     with cache.lock(manifest.name, manifest.version):

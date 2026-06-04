@@ -830,3 +830,32 @@ def test_absolute_path_resource_ref_rejected_even_without_package_context(tmp_pa
         build_resource_binding(graph, session)
     assert exc.value.code == 10
     assert exc.value.details["reason"] == "absolute_path"
+
+
+@pytest.mark.parametrize(
+    "content_type,ext,payload",
+    [
+        ("text", "txt", b"plain text payload\n"),
+        ("xml", "xml", b"<root><item>x</item></root>\n"),
+        ("json", "json", b'{"k": "v"}\n'),
+        ("yaml", "yaml", b"k: v\n"),
+    ],
+)
+def test_non_markdown_resource_substituted_verbatim(tmp_path, content_type, ext, payload):
+    rel = f"resources/body.{ext}"
+    tarballs = {
+        ("@acme/p", "1.0.0"): _pack(
+            {
+                "name": "@acme/p",
+                "version": "1.0.0",
+                "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+                "resources": [{"id": "body", "path": rel, "contentType": content_type}],
+            },
+            {
+                "prompts/base.yaml": f'greeting: "${{resource:../{rel}}}"\n'.encode(),
+                rel: payload,
+            },
+        ),
+    }
+    resolved, _ = _resolve(tmp_path, "@acme/p@1.0.0#base", tarballs)
+    assert resolved["greeting"] == payload.decode()
