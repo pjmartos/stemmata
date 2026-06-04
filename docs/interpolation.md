@@ -101,7 +101,27 @@ list: [[one, two, three]]
 ```yaml
 body: "Running in ${vars.region} at ${vars.port}"
 ```
-Resolved value must be a scalar; a list/map in textual position aborts with exit `15` (`non_scalar_in_textual`).
+Resolved value must be a scalar; a map in textual position aborts with exit `15` (`non_scalar_in_textual`).
+
+A list of scalars is allowed only when its placeholder sits **alone on its line** within the textual scalar — meaning everything before the `${...}` on that line is whitespace and everything after it up to the next newline is also whitespace. In that case the list is rendered as markdown bullets, with each item on its own line and prefixed by `- `. The leading whitespace of the placeholder's line is preserved as the indent of subsequent bullet lines, so the rendering remains visually aligned.
+
+```yaml
+config:
+  items:
+    - one item
+    - second item
+prompt: |
+  # Section
+  ${config.items}
+```
+resolves to
+```
+# Section
+- one item
+- second item
+```
+
+If the placeholder is not alone on its line, the merge aborts with exit `15` (`list_inline_in_textual`). Lists containing non-scalar items (nested lists or maps) abort with `non_scalar_in_textual` regardless of position.
 
 ### Recursive resolution
 

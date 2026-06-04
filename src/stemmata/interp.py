@@ -162,6 +162,31 @@ def _is_scalar(v: Any) -> bool:
     return v is None or isinstance(v, (bool, int, float, str))
 
 
+def _is_list_of_scalars(v: Any) -> bool:
+    return isinstance(v, list) and all(_is_scalar(item) for item in v)
+
+
+def _alone_on_line(text: str, offset: int, placeholder_len: int) -> tuple[bool, str]:
+    line_start = text.rfind("\n", 0, offset) + 1
+    prefix = text[line_start:offset]
+    if prefix.strip() != "":
+        return False, ""
+    end = text.find("\n", offset + placeholder_len)
+    if end == -1:
+        end = len(text)
+    suffix = text[offset + placeholder_len:end]
+    if suffix.strip() != "":
+        return False, ""
+    return True, prefix
+
+
+def _render_bullets(items: list[Any], indent: str) -> str:
+    if not items:
+        return ""
+    lines = [f"- {_stringify_scalar(item)}" for item in items]
+    return ("\n" + indent).join(lines)
+
+
 def _parse_placeholder_tokens(text: str) -> list[tuple[str, str, int]]:
     tokens: list[tuple[str, str, int]] = []
     i = 0
@@ -508,14 +533,26 @@ def _interp(
                     resources=resources,
                     annotations=annotations,
                 )
-                if not _is_scalar(resolved):
+                if _is_scalar(resolved):
+                    parts_out.append(_stringify_scalar(resolved))
+                    continue
+                if _is_list_of_scalars(resolved):
+                    alone, indent = _alone_on_line(text, offset, len(val) + 3)
+                    if alone:
+                        parts_out.append(_render_bullets(resolved, indent))
+                        continue
                     raise MergeError(
                         path=inner,
-                        conflict="non_scalar_in_textual",
+                        conflict="list_inline_in_textual",
                         types=[type(resolved).__name__],
                         nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
                     )
-                parts_out.append(_stringify_scalar(resolved))
+                raise MergeError(
+                    path=inner,
+                    conflict="non_scalar_in_textual",
+                    types=[type(resolved).__name__],
+                    nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
+                )
         return "".join(parts_out)
     return node
 
@@ -789,9 +826,20 @@ def collect_placeholder_errors(
                 reason="explicit_null", ancestors_searched=searched, providing_ancestor=provider,
             ))
         elif not _is_scalar(value):
-            out.append(MergeError(
-                path=inner,
-                conflict="non_scalar_in_textual",
-                types=[type(value).__name__],
-                nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
-            ))
+            if _is_list_of_scalars(value):
+                alone, _indent = _alone_on_line(text, offset, len(val) + 3)
+                if alone:
+                    continue
+                out.append(MergeError(
+                    path=inner,
+                    conflict="list_inline_in_textual",
+                    types=[type(value).__name__],
+                    nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
+                ))
+            else:
+                out.append(MergeError(
+                    path=inner,
+                    conflict="non_scalar_in_textual",
+                    types=[type(value).__name__],
+                    nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
+                ))

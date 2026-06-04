@@ -80,8 +80,74 @@ def test_null_intermediate_is_not_provided():
 
 
 def test_non_scalar_in_textual_raises():
-    with pytest.raises(MergeError):
+    with pytest.raises(MergeError) as exc:
         _interp("x: prefix ${val} suffix\n", [{"val": [1, 2, 3]}])
+    assert exc.value.details["conflict"] == "list_inline_in_textual"
+
+
+def test_map_in_textual_raises_non_scalar():
+    with pytest.raises(MergeError) as exc:
+        _interp("x: prefix ${val} suffix\n", [{"val": {"a": 1}}])
+    assert exc.value.details["conflict"] == "non_scalar_in_textual"
+
+
+def test_list_alone_on_line_renders_bullets_in_block_scalar():
+    result = _interp(
+        "prompt: |\n  # Here some title\n  ${items}\n",
+        [{"items": ["one item", "second item"]}],
+    )
+    assert result["prompt"] == "# Here some title\n- one item\n- second item\n"
+
+
+def test_list_alone_on_line_indented_renders_indented_bullets():
+    result = _interp(
+        "prompt: |\n  Intro:\n    ${items}\n",
+        [{"items": ["a", "b"]}],
+    )
+    assert result["prompt"] == "Intro:\n  - a\n  - b\n"
+
+
+def test_list_inline_with_prefix_raises():
+    with pytest.raises(MergeError) as exc:
+        _interp(
+            "prompt: |\n  Items: ${items}\n",
+            [{"items": ["a", "b"]}],
+        )
+    assert exc.value.details["conflict"] == "list_inline_in_textual"
+
+
+def test_list_inline_with_suffix_raises():
+    with pytest.raises(MergeError) as exc:
+        _interp(
+            "prompt: |\n  ${items} suffix\n",
+            [{"items": ["a", "b"]}],
+        )
+    assert exc.value.details["conflict"] == "list_inline_in_textual"
+
+
+def test_empty_list_in_textual_renders_empty():
+    result = _interp(
+        "prompt: |\n  before\n  ${items}\n  after\n",
+        [{"items": []}],
+    )
+    assert result["prompt"] == "before\n\nafter\n"
+
+
+def test_list_of_mixed_scalars_renders_bullets():
+    result = _interp(
+        "prompt: |\n  ${items}\n",
+        [{"items": ["a", 42, True, None]}],
+    )
+    assert result["prompt"] == "- a\n- 42\n- true\n- \n"
+
+
+def test_list_with_nested_list_in_textual_raises_non_scalar():
+    with pytest.raises(MergeError) as exc:
+        _interp(
+            "prompt: |\n  ${items}\n",
+            [{"items": [[1, 2], [3]]}],
+        )
+    assert exc.value.details["conflict"] == "non_scalar_in_textual"
 
 
 def test_multiple_placeholders_in_one_string():
@@ -168,11 +234,12 @@ def test_cycle_in_textual_context():
 
 
 def test_non_scalar_in_textual_via_chain():
-    with pytest.raises(MergeError):
+    with pytest.raises(MergeError) as exc:
         _interp(
             "x: prefix ${a} suffix\n",
             [{"a": "${b}", "b": [1, 2, 3]}],
         )
+    assert exc.value.details["conflict"] == "list_inline_in_textual"
 
 
 def test_abstract_resolved_by_descendant():
