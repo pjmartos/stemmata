@@ -28,7 +28,7 @@ Prompt reuse across repositories is a mess. You copy a YAML prompt into a new pr
 - **Deterministic merging**: nearest-wins for scalars and lists, deep-merge for maps, with breadth-first search distance plus reference occurring-ordering (for breaking ties) so the output is reproducible.
 - **Placeholder interpolation**: `${path}` references resolve against the merged namespace, with structural, textual, and list-splat forms.
 - **Abstract placeholders**: a mid-graph prompt may declare required "holes" via `${abstract:<dotted-path>}`, and any descendant is free to fill them — like the template-method pattern in OOP. `resolve` hard-fails on unfilled holes (exit `16`); `publish`, `describe`, `tree`, and `validate` report them as contract information and keep working.
-- **Markdown resource embedding**: packages may ship Markdown payloads alongside prompts and splice them in as opaque text via `${resource:...}`, resolved eagerly on the same cache and registry rails as prompts.
+- **Text resource embedding**: packages may ship resource payloads alongside prompts — `markdown`, `text`, `xml`, `json`, or `yaml` — and splice them in as opaque text via `${resource:...}`, resolved eagerly on the same cache and registry rails as prompts.
 - **npm registry transport**: speaks the standard npm REST API; credentials read from `~/.npmrc`.
 
 ## Installation
@@ -135,7 +135,7 @@ Resource-limit flags match `resolve`.
 
 Prints the ancestor DAG rooted at `<target>`, which takes the same two forms as `resolve` (a local YAML/JSON path or a `@<scope>/<name>@<version>#<prompt-id>` coordinate). The resolver runs the same eager pipeline as `resolve`, so cycles, missing ancestors, and version conflicts surface with the usual exit codes; `--offline` / `--refresh` and the resource-limit flags all apply.
 
-Default `--output text` produces an ASCII tree (`|-- ` / `` `-- `` connectors). Markdown resources reached via `${resource:...}` are rendered inline under the prompt (or resource) that references them and are prefixed with `resource:` to disambiguate them from prompt coordinates. Diamond inheritance — across both ancestor and resource edges — is rendered once in full and subsequent visits are marked `(seen)` so the output stays finite:
+Default `--output text` produces an ASCII tree (`|-- ` / `` `-- `` connectors). Text resources reached via `${resource:...}` are rendered inline under the prompt (or resource) that references them and are prefixed with `resource:` to disambiguate them from prompt coordinates. Diamond inheritance — across both ancestor and resource edges — is rendered once in full and subsequent visits are marked `(seen)` so the output stays finite:
 
 ```
 root.yaml
@@ -151,7 +151,7 @@ root.yaml
 
 ### `init [path]`
 
-Scaffolds (or updates) a `package.json` at `path` (default `.`). Scans `./prompts` recursively for `.yaml`, `.yml`, and `.json` files and `./resources` recursively for `.md` files, deriving each entry's `id` from the basename and setting `contentType` from the extension. Entries are sorted alphabetically by path and rendered one-per-line.
+Scaffolds (or updates) a `package.json` at `path` (default `.`). Scans `./prompts` recursively for `.yaml`, `.yml`, and `.json` files and `./resources` recursively for `.md`, `.txt`, `.xml`, `.json`, `.yaml`, and `.yml` files, deriving each entry's `id` from the basename and setting `contentType` from the extension (`.md` → `markdown`, `.txt` → `text`, `.xml` → `xml`, `.json` → `json`, `.yaml`/`.yml` → `yaml`). Entries are sorted alphabetically by path and rendered one-per-line.
 
 ### `install [path]`
 
@@ -202,9 +202,9 @@ body: |
 
 `name` must be `@<scope>/<n>`. `version` is strict SemVer, no ranges. `prompts` is non-empty; `id` defaults to basename without extension and must match `[a-z0-9][a-z0-9_-]*`. `resources` is optional; ids, paths, and case-folded path uniqueness are shared across the union of `prompts` and `resources`.
 
-### Markdown resources
+### Text resources
 
-Prompts may embed opaque Markdown payloads via `${resource:<POSIX-relative-path>}` (same-package) or `${resource:@<scope>/<name>@<version>#<id>}` (coordinate). The reference must stand alone — either as the sole content of a line inside a block scalar or a Markdown file, or as the entire trimmed text of a flow-style YAML scalar or JSON string. Resource payloads are substituted verbatim after ancestor-namespace interpolation; they do not contribute keys to the merged namespace and any `${...}` sequences inside them are left literal.
+Prompts may embed opaque text payloads via `${resource:<POSIX-relative-path>}` (same-package) or `${resource:@<scope>/<name>@<version>#<id>}` (coordinate). A resource entry's `contentType` may be `markdown`, `text`, `xml`, `json`, or `yaml`; the runtime treats every payload as opaque text — the `contentType` is metadata for downstream consumers. The reference must stand alone — either as the sole content of a line inside a block scalar or a resource file, or as the entire trimmed text of a flow-style YAML scalar or JSON string. Resource payloads are substituted verbatim after ancestor-namespace interpolation; they do not contribute keys to the merged namespace and any `${...}` sequences inside them are left literal.
 
 ### Abstract placeholders
 

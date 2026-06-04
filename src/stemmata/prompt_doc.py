@@ -8,7 +8,7 @@ from typing import Any
 from stemmata.errors import SchemaError
 from stemmata.json_loader import load_json_with_positions
 from stemmata.manifest import is_scoped_name, is_semver
-from stemmata.markdown_loader import RESOURCE_RE, mask_escapes
+from stemmata.resource_loader import RESOURCE_RE, mask_escapes
 from stemmata.yaml_loader import load_with_positions, scalar_meta
 
 

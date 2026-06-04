@@ -7,7 +7,7 @@ from typing import Iterator
 
 from stemmata.errors import PromptCliError, SchemaError
 from stemmata.manifest import Manifest, PromptEntry, ResourceEntry
-from stemmata.markdown_loader import read_markdown
+from stemmata.resource_loader import read_resource
 from stemmata.prompt_doc import (
     CoordRef,
     PathRef,
@@ -58,7 +58,7 @@ def _iter_resource_usage(manifest: Manifest, package_root: Path) -> Iterator[_Re
         if not path.is_file():
             continue
         try:
-            md_doc = read_markdown(str(path), strict=False)
+            md_doc = read_resource(str(path), strict=False)
         except SchemaError:
             continue
         for mref in md_doc.references:

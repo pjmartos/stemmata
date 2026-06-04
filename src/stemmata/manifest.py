@@ -18,6 +18,7 @@ _SEMVER_RE = re.compile(
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_\-]*$")
 _ASCII_PRINTABLE_RE = re.compile(r"^[\x20-\x7e]+$")
 _FORBIDDEN_SUFFIXES = ("-SNAPSHOT",)
+_ALLOWED_RESOURCE_CONTENT_TYPES = ("markdown", "text", "xml", "json", "yaml")
 
 
 def is_scoped_name(name: str) -> bool:
@@ -355,9 +356,10 @@ def validate_manifest(data: dict[str, Any], *, file: str = "package.json") -> Ma
             seen_ids.add(rid)
 
             content_type = entry.get("contentType")
-            if content_type != "markdown":
+            if content_type not in _ALLOWED_RESOURCE_CONTENT_TYPES:
+                allowed = ", ".join(repr(t) for t in _ALLOWED_RESOURCE_CONTENT_TYPES)
                 raise SchemaError(
-                    f"resource entry path={path!r} has contentType {content_type!r}; must be 'markdown'",
+                    f"resource entry path={path!r} has contentType {content_type!r}; must be one of {allowed}",
                     file=file,
                     field_name=f"resources[path={path!r}].contentType",
                     reason="invalid_content_type",

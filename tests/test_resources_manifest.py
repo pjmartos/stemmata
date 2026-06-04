@@ -38,10 +38,26 @@ def test_resource_default_id_derived_from_path():
     assert m.resources[0].id == "overview"
 
 
-def test_resource_must_be_markdown():
+@pytest.mark.parametrize("content_type", ["markdown", "text", "xml", "json", "yaml"])
+def test_resource_content_types_accepted(content_type):
+    m = parse_manifest(_manifest(resources=[
+        {"id": "x", "path": f"resources/x.{content_type}", "contentType": content_type},
+    ]))
+    assert m.resources[0].contentType == content_type
+
+
+def test_resource_unknown_content_type_rejected():
     with pytest.raises(SchemaError) as ei:
         parse_manifest(_manifest(resources=[
-            {"id": "x", "path": "resources/x.md", "contentType": "yaml"},
+            {"id": "x", "path": "resources/x.bin", "contentType": "binary"},
+        ]))
+    assert ei.value.details["reason"] == "invalid_content_type"
+
+
+def test_resource_missing_content_type_rejected():
+    with pytest.raises(SchemaError) as ei:
+        parse_manifest(_manifest(resources=[
+            {"id": "x", "path": "resources/x.md"},
         ]))
     assert ei.value.details["reason"] == "invalid_content_type"
 

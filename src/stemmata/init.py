@@ -13,6 +13,8 @@ from stemmata.manifest import _derive_default_id
 _YAML_EXTS = {".yaml", ".yml"}
 _JSON_EXTS = {".json"}
 _MARKDOWN_EXTS = {".md"}
+_TEXT_EXTS = {".txt"}
+_XML_EXTS = {".xml"}
 
 _NAME_BAD_CHAR_RE = re.compile(r"[^a-z0-9_-]+")
 
@@ -44,6 +46,14 @@ def _content_type_for(ext: str, *, kind: str) -> str | None:
         return None
     if ext in _MARKDOWN_EXTS:
         return "markdown"
+    if ext in _TEXT_EXTS:
+        return "text"
+    if ext in _XML_EXTS:
+        return "xml"
+    if ext in _JSON_EXTS:
+        return "json"
+    if ext in _YAML_EXTS:
+        return "yaml"
     return None
 
 
