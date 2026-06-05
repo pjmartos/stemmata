@@ -155,6 +155,10 @@ def _check_one_prompt(
     )
     placeholder_errors = [e for e in diagnostics if not isinstance(e, AbstractUnfilledError)]
     abstracts = [e for e in diagnostics if isinstance(e, AbstractUnfilledError)]
+    root_is_abstract = graph.nodes[graph.root_id].doc.is_abstract
+    if root_is_abstract and abstracts:
+        for e in abstracts:
+            e.details["reason"] = "is_abstract"
     errors.extend(placeholder_errors)
 
     resources: ResourceBinding | None = None
@@ -249,10 +253,17 @@ def run_publish(opts: PublishOptions) -> PublishResult:
         if per_abstracts:
             paths = [a.details.get("placeholder") for a in per_abstracts]
             stderr = opts.stderr if opts.stderr is not None else sys.stderr
-            stderr.write(
-                f"warning: prompt {canonical} has {len(per_abstracts)} unfilled "
-                f"abstract placeholder(s): {', '.join(str(p) for p in paths)}\n"
-            )
+            if all(a.details.get("reason") == "is_abstract" for a in per_abstracts):
+                stderr.write(
+                    f"info: prompt {canonical} is marked abstract: true "
+                    f"({len(per_abstracts)} declared abstract(s): "
+                    f"{', '.join(str(p) for p in paths)})\n"
+                )
+            else:
+                stderr.write(
+                    f"warning: prompt {canonical} has {len(per_abstracts)} unfilled "
+                    f"abstract placeholder(s): {', '.join(str(p) for p in paths)}\n"
+                )
             for a in per_abstracts:
                 loc = a.location if isinstance(a.location, dict) else {}
                 abstracts_payload.append({

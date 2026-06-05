@@ -2171,3 +2171,201 @@ def test_validate_abstracts_payload_points_at_declarer_source(tmp_path):
         f"reported (file={entry['file']}, line={entry['line']}) is incoherent "
         f"with the file's actual length"
     )
+
+
+# --- `abstract: true` flag ---------------------------------------------------
+
+
+def test_resolve_abstract_true_root_exits_with_is_abstract(tmp_path):
+    f = tmp_path / "tpl.yaml"
+    f.write_text(
+        "abstract: true\n"
+        "abstracts:\n"
+        "  who:\n"
+        "    description: addressee\n"
+        "greeting: ${abstract:who}\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(f)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_ABSTRACT_UNFILLED
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["code"] == 16
+    assert env["error"]["category"] == "abstract_unfilled"
+    assert env["error"]["details"]["reason"] == "is_abstract"
+    assert env["error"]["details"]["abstract_paths"] == ["who"]
+    assert "aggregated" not in env["error"]["details"]
+
+
+def test_resolve_abstract_true_does_not_emit_per_marker_errors(tmp_path):
+    f = tmp_path / "tpl.yaml"
+    f.write_text(
+        "abstract: true\n"
+        "abstracts:\n"
+        "  a:\n"
+        "    description: a\n"
+        "  b:\n"
+        "    description: b\n"
+        "x: ${abstract:a}\n"
+        "y: ${abstract:b}\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(f)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_ABSTRACT_UNFILLED
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["details"]["reason"] == "is_abstract"
+
+
+def test_resolve_concrete_child_of_abstract_parent_succeeds(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "abstract: true\n"
+        "abstracts:\n"
+        "  who:\n"
+        "    description: addressee\n"
+        "greeting: ${abstract:who}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\nwho: world\n")
+    cap = _Capture()
+    code = run(["--cache-dir", str(tmp_path / "cache"), "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    assert "world" in cap.out.getvalue()
+
+
+def test_resolve_concrete_child_with_unfilled_inherited_still_fails(tmp_path):
+    # Parent is `abstract: true`. The child does NOT mark itself abstract
+    # but also does NOT fill the inherited hole — the child becomes the
+    # contract closer and must satisfy everything.
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "abstract: true\n"
+        "abstracts:\n"
+        "  who:\n"
+        "    description: addressee\n"
+        "greeting: ${abstract:who}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\nbody: x\n")
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_ABSTRACT_UNFILLED
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["details"]["reason"] in ("not_provided", "abstract_inherited")
+
+
+def test_resolve_chained_abstract_parents(tmp_path):
+    # A (abstract) → B (abstract) → C (concrete). Resolving B fails with
+    # is_abstract; resolving C succeeds when it fills everything.
+    a = tmp_path / "a.yaml"
+    a.write_text(
+        "abstract: true\n"
+        "abstracts:\n"
+        "  who:\n"
+        "    description: addressee\n"
+        "greeting: ${abstract:who}\n"
+    )
+    b = tmp_path / "b.yaml"
+    b.write_text("abstract: true\nancestors:\n  - ./a.yaml\n")
+    c = tmp_path / "c.yaml"
+    c.write_text("ancestors:\n  - ./b.yaml\nwho: world\n")
+
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(b)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_ABSTRACT_UNFILLED
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["details"]["reason"] == "is_abstract"
+
+    cap2 = _Capture()
+    code2 = run(["--cache-dir", str(tmp_path / "cache"), "resolve", str(c)],
+                stdout=cap2.out, stderr=cap2.err)
+    assert code2 == EXIT_OK, cap2.out.getvalue() + cap2.err.getvalue()
+    assert "world" in cap2.out.getvalue()
+
+
+def test_tree_text_marks_abstract_node(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "abstract: true\n"
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening line\n"
+        "greeting: ${abstract:greeting}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\ngreeting: hi\n")
+    cap = _Capture()
+    code = run(["--cache-dir", str(tmp_path / "cache"), "tree", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    out = cap.out.getvalue()
+    base_real = str(base.resolve())
+    base_lines = [ln for ln in out.splitlines() if base_real in ln]
+    child_real = str(child.resolve())
+    child_lines = [ln for ln in out.splitlines() if child_real in ln]
+    assert base_lines and all("[abstract]" in ln for ln in base_lines), out
+    assert child_lines and all("[abstract]" not in ln for ln in child_lines), out
+
+
+def test_tree_json_marks_abstract_node(tmp_path):
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "abstract: true\n"
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening line\n"
+        "greeting: ${abstract:greeting}\n"
+    )
+    child = tmp_path / "child.yaml"
+    child.write_text("ancestors:\n  - ./base.yaml\ngreeting: hi\n")
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "tree", str(child)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    env = json.loads(cap.out.getvalue())
+    by_id = {n["id"]: n for n in env["result"]["nodes"]}
+    base_real = str(base.resolve())
+    child_real = str(child.resolve())
+    assert by_id[base_real]["abstract"] is True
+    assert by_id[child_real]["abstract"] is False
+
+
+def test_validate_marks_abstract_root_reason(tmp_path):
+    f = tmp_path / "tpl.yaml"
+    f.write_text(
+        "abstract: true\n"
+        "abstracts:\n"
+        "  who:\n"
+        "    description: addressee\n"
+        "greeting: ${abstract:who}\n"
+    )
+    cap = _Capture()
+    code = run(["--output", "json", "validate", str(f)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_OK, cap.out.getvalue() + cap.err.getvalue()
+    payload = json.loads(cap.out.getvalue())["result"]
+    entries = payload["abstracts"]
+    assert len(entries) == 1, entries
+    assert entries[0]["reason"] == "is_abstract"
+    assert entries[0]["path"] == "who"
+
+
+def test_abstract_flag_must_be_boolean(tmp_path):
+    f = tmp_path / "bad.yaml"
+    f.write_text("abstract: nope\nfoo: bar\n")
+    cap = _Capture()
+    code = run(["--output", "json", "--cache-dir", str(tmp_path / "cache"),
+                "resolve", str(f)],
+               stdout=cap.out, stderr=cap.err)
+    assert code == EXIT_SCHEMA
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["details"]["reason"] == "invalid_abstract_flag"

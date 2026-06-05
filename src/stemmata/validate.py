@@ -114,6 +114,9 @@ def _resolve_pipeline(graph, session, schema_opts: SchemaCheckOptions) -> _Pipel
     )
     abstracts = [e for e in diagnostics if isinstance(e, AbstractUnfilledError)]
     others = [e for e in diagnostics if not isinstance(e, AbstractUnfilledError)]
+    if graph.nodes[graph.root_id].doc.is_abstract:
+        for e in abstracts:
+            e.details["reason"] = "is_abstract"
 
     resources = build_resource_binding(graph, session)
 

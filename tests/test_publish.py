@@ -346,6 +346,30 @@ def test_publish_still_fails_on_real_unresolvable_alongside_abstracts(tmp_path):
     assert any(e["details"]["placeholder"] == "missing.var" for e in placeholders)
 
 
+def test_publish_marks_abstract_true_as_is_abstract(tmp_path):
+    _write_pkg(tmp_path, {
+        "name": "@acme/p",
+        "version": "1.0.0",
+        "prompts": [{"id": "base", "path": "prompts/base.yaml"}],
+    }, {
+        "prompts/base.yaml": (
+            "abstract: true\n"
+            "abstracts:\n  name:\n    description: addressee\n"
+            "body: hello ${abstract:name}\n"
+        ),
+    })
+    stderr = io.StringIO()
+    result = run_publish(_opts(tmp_path, stderr=stderr))
+    assert result.uploaded is False
+    assert [a["path"] for a in result.abstracts] == ["name"]
+    assert result.abstracts[0]["reason"] == "is_abstract"
+    err_text = stderr.getvalue()
+    assert "is marked abstract: true" in err_text
+    assert "@acme/p@1.0.0#base" in err_text
+    assert "warning:" not in err_text
+    assert "info:" in err_text
+
+
 def test_publish_abstracts_across_multiple_prompts(tmp_path):
     _write_pkg(tmp_path, {
         "name": "@acme/p",

@@ -15,7 +15,7 @@ from stemmata.yaml_loader import load_with_positions, scalar_meta
 _EMPTY_RESOURCE_RE = re.compile(r"\$\{resource:\s*\}")
 
 
-RESERVED_KEYS = {"ancestors", "$schema", "abstracts"}
+RESERVED_KEYS = {"ancestors", "$schema", "abstracts", "abstract"}
 
 
 _ABSTRACT_TYPES = ("string", "list")
@@ -145,6 +145,7 @@ class PromptDocument:
     namespace: dict[str, Any] = field(default_factory=dict)
     resource_refs: list[ResourceRefInPrompt] = field(default_factory=list)
     abstracts: dict[str, AbstractAnnotation] = field(default_factory=dict)
+    is_abstract: bool = False
     disk_file: str = ""
 
     def __post_init__(self) -> None:
@@ -380,6 +381,15 @@ def parse_prompt(
             reason="invalid_schema",
         )
     abstracts = _parse_abstracts_block(data.get("abstracts"), file=file)
+    raw_abstract = data.get("abstract", False)
+    if not isinstance(raw_abstract, bool):
+        raise SchemaError(
+            f"'abstract' must be a boolean, got {type(raw_abstract).__name__}",
+            file=file,
+            field_name="abstract",
+            reason="invalid_abstract_flag",
+        )
+    is_abstract = bool(raw_abstract)
     namespace = _expand_dotted_keys(
         {k: v for k, v in data.items() if k not in RESERVED_KEYS},
         file=file,
@@ -396,6 +406,7 @@ def parse_prompt(
         schema_uri=schema_uri,
         namespace=namespace,
         abstracts=abstracts,
+        is_abstract=is_abstract,
     )
 
 

@@ -6,10 +6,13 @@
 #   - ${abstract:persona.tone}       — how the persona speaks
 #   - ${abstract:persona.role}       — what the persona is for
 #
-# This prompt can be published and consumed as a library. On its own it
-# cannot be `stemmata resolve`-d: that would exit 16 (abstract unfilled).
-# Any descendant that provides concrete values at these dotted paths
-# satisfies the contract and becomes resolvable.
+# `abstract: true` marks the whole prompt as a library template. It can be
+# published and consumed as a library but cannot be `stemmata resolve`-d on
+# its own: that exits 16 with `reason: "is_abstract"`. Any descendant that
+# is not itself `abstract: true` becomes the contract closer and must
+# provide concrete values at every accumulated abstract path.
+abstract: true
+
 abstracts:
   persona.name:
     description: "A persona's name"

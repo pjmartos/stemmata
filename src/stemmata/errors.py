@@ -141,16 +141,26 @@ class AbstractUnfilledError(PromptCliError):
         column: int | None,
         reason: str,
         ancestors_searched: list[str],
+        abstract_paths: list[str] | None = None,
     ):
+        if reason == "is_abstract":
+            message = (
+                f"Prompt {file} is marked abstract: true and cannot be resolved directly"
+            )
+        else:
+            message = f"Abstract ${{abstract:{placeholder}}} in {file}:{line} is unfilled ({reason})"
+        details: dict[str, Any] = {
+            "reason": reason,
+            "placeholder": placeholder,
+            "ancestors_searched": ancestors_searched,
+        }
+        if abstract_paths is not None:
+            details["abstract_paths"] = list(abstract_paths)
         super().__init__(
             EXIT_ABSTRACT_UNFILLED,
-            f"Abstract ${{abstract:{placeholder}}} in {file}:{line} is unfilled ({reason})",
+            message,
             {"file": file, "line": line, "column": column},
-            {
-                "reason": reason,
-                "placeholder": placeholder,
-                "ancestors_searched": ancestors_searched,
-            },
+            details,
         )
 
 
