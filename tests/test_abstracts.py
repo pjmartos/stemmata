@@ -221,6 +221,25 @@ def test_coupling_flags_undocumented_introduction(tmp_path):
     assert errors[0].details["reason"] == "undocumented_abstract"
 
 
+def test_coupling_still_fires_on_abstract_true_prompt(tmp_path):
+    # `abstract: true` does NOT relax coupling rules: an annotation without a
+    # matching body marker is still a SchemaError.
+    f = _write(tmp_path / "x.yaml",
+        """
+        abstract: true
+        abstracts:
+          unused:
+            description: nobody references this
+        body: hello world
+        """,
+    )
+    import pytest
+    from stemmata.errors import SchemaError
+    with pytest.raises(SchemaError) as exc:
+        resolve_graph(str(f), _session(tmp_path))
+    assert exc.value.details["reason"] == "annotation_without_declaration"
+
+
 def test_coupling_silent_on_descendant_marker_inherited_from_ancestor(tmp_path):
     base = _write(tmp_path / "base.yaml",
         """

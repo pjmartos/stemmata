@@ -396,3 +396,33 @@ def test_abstracts_block_stripped_from_namespace():
     doc = parse_prompt(text, file="x.yaml")
     assert "abstracts" not in doc.namespace
     assert doc.namespace == {"greeting": "${abstract:greeting}", "other": 1}
+
+
+def test_abstract_flag_defaults_false():
+    doc = parse_prompt("foo: bar\n", file="x.yaml")
+    assert doc.is_abstract is False
+
+
+def test_abstract_flag_true():
+    text = (
+        "abstract: true\n"
+        "abstracts:\n"
+        "  greeting:\n"
+        "    description: opening\n"
+        "greeting: ${abstract:greeting}\n"
+    )
+    doc = parse_prompt(text, file="x.yaml")
+    assert doc.is_abstract is True
+    assert "abstract" not in doc.namespace
+
+
+def test_abstract_flag_false_explicit():
+    doc = parse_prompt("abstract: false\nfoo: bar\n", file="x.yaml")
+    assert doc.is_abstract is False
+    assert "abstract" not in doc.namespace
+
+
+def test_abstract_flag_non_boolean_rejected():
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt("abstract: yes-please\nfoo: bar\n", file="x.yaml")
+    assert exc.value.details["reason"] == "invalid_abstract_flag"

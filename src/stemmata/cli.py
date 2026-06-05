@@ -298,6 +298,27 @@ def _declared_abstracts(graph) -> list[DeclaredAbstract]:
     return out
 
 
+def _accumulated_abstract_paths(graph) -> list[str]:
+    return sorted({
+        path
+        for nid in graph.nodes
+        for path in graph.nodes[nid].doc.abstracts
+    })
+
+
+def _abstract_root_error(graph) -> AbstractUnfilledError:
+    root_id = graph.root_id
+    return AbstractUnfilledError(
+        placeholder="",
+        file=graph.nodes[root_id].file,
+        line=None,
+        column=None,
+        reason="is_abstract",
+        ancestors_searched=[nid.canonical for nid in graph.order],
+        abstract_paths=_accumulated_abstract_paths(graph),
+    )
+
+
 def _gate_abstract_invariants(
     graph,
     schema_opts: SchemaCheckOptions | None,
@@ -318,7 +339,7 @@ def _gate_abstract_invariants(
 def _resolve_coord(
     pkg: str, version: str, prompt_id: str, session: Session,
     schema_opts: SchemaCheckOptions | None = None,
-) -> tuple[str, Any, list[dict[str, Any]], str, dict[str, list[dict[str, Any]]]]:
+) -> tuple[str, Any, list[dict[str, Any]], str, dict[str, list[dict[str, Any]]], bool]:
     session.version_overrides = {}
     target = f"{pkg}@{version}#{prompt_id}"
     graph = resolve_graph(target, session)
@@ -400,7 +421,14 @@ def _resolve_coord(
         "declared": [_ref_payload(r, annotations.get(r.path)) for r in declared_refs],
         "inherited": [_ref_payload(r, annotations.get(r.path)) for r in inherited_refs],
     }
-    return graph.root_id.canonical, content, ancestors_payload, root_file, abstracts_payload
+    return (
+        graph.root_id.canonical,
+        content,
+        ancestors_payload,
+        root_file,
+        abstracts_payload,
+        graph.nodes[graph.root_id].doc.is_abstract,
+    )
 
 
 def _run_resolve(args: argparse.Namespace, stdout, stderr) -> int:
@@ -445,6 +473,9 @@ def _run_resolve(args: argparse.Namespace, stdout, stderr) -> int:
         if len(gate_errors) == 1:
             raise gate_errors[0]
         raise AggregatedError(gate_errors, command="resolve")
+
+    if graph.nodes[graph.root_id].doc.is_abstract:
+        raise _abstract_root_error(graph)
 
     order = layer_order(graph)
     layers_data = [graph.nodes[nid].doc.namespace for nid in order]
@@ -556,8 +587,12 @@ def _render_tree(graph, resources=None) -> str:
 
     def labelled(canonical: str, kind: str) -> str:
         base = _label_for(canonical, kind)
-        if kind == "prompt" and canonical in abstracts_by_prompt:
-            base += "  " + _format_abstracts_label(abstracts_by_prompt[canonical])
+        if kind == "prompt":
+            nid = canonical_to_nid.get(canonical)
+            if nid is not None and graph.nodes[nid].doc.is_abstract:
+                base = f"[abstract] {base}"
+            if canonical in abstracts_by_prompt:
+                base += "  " + _format_abstracts_label(abstracts_by_prompt[canonical])
         return base
 
     root_canonical = graph.root_id.canonical
@@ -638,6 +673,7 @@ def _run_tree(args: argparse.Namespace, stdout, stderr) -> int:
             "file": graph.nodes[nid].file,
             "distance": graph.distances[nid],
             "kind": "prompt",
+            "abstract": graph.nodes[nid].doc.is_abstract,
             "abstracts": abstracts_by_prompt.get(nid.canonical, []),
         }
         for nid in graph.order
@@ -737,7 +773,7 @@ def _run_describe(args: argparse.Namespace, stdout, stderr) -> int:
             target_ids = [p.id for p in manifest.prompts]
         resolved_docs: list[dict[str, Any]] = []
         for pid in target_ids:
-            canonical, content, ancestors, _, abstracts = _resolve_coord(
+            canonical, content, ancestors, _, abstracts, is_abstract = _resolve_coord(
                 pkg, version, pid, session, schema_opts=schema_opts,
             )
             resolved_docs.append({
@@ -745,6 +781,7 @@ def _run_describe(args: argparse.Namespace, stdout, stderr) -> int:
                 "content": content,
                 "ancestors": ancestors,
                 "abstracts": abstracts,
+                "abstract": is_abstract,
             })
     finally:
         if deadline_handler_installed:
@@ -755,6 +792,8 @@ def _run_describe(args: argparse.Namespace, stdout, stderr) -> int:
         parts: list[str] = []
         for d in resolved_docs:
             parts.append(f"---\n# {d['root']}\n")
+            if d.get("abstract"):
+                parts.append("# abstract: true\n")
             abstr = d.get("abstracts") or {}
             declared = abstr.get("declared") or []
             inherited = abstr.get("inherited") or []
