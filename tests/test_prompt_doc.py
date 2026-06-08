@@ -385,6 +385,34 @@ def test_abstracts_type_list_in_textual_position_rejected():
     assert exc.value.details["reason"] == "list_abstract_in_textual_position"
 
 
+def test_abstracts_type_list_alone_on_line_in_block_scalar_accepted():
+    text = (
+        "abstracts:\n"
+        "  steps:\n"
+        "    description: list of steps\n"
+        "    type: list\n"
+        "body: |\n"
+        "  Header\n"
+        "  ${abstract:steps}\n"
+    )
+    doc = parse_prompt(text, file="x.yaml")
+    assert "steps" in doc.abstracts
+
+
+def test_abstracts_type_list_inline_in_block_scalar_rejected():
+    text = (
+        "abstracts:\n"
+        "  steps:\n"
+        "    description: list of steps\n"
+        "    type: list\n"
+        "body: |\n"
+        "  Header: ${abstract:steps}\n"
+    )
+    with pytest.raises(SchemaError) as exc:
+        parse_prompt(text, file="x.yaml")
+    assert exc.value.details["reason"] == "list_abstract_in_textual_position"
+
+
 def test_abstracts_block_stripped_from_namespace():
     text = (
         "abstracts:\n"

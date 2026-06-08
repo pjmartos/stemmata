@@ -488,11 +488,6 @@ def _interp(
                         raise AbstractUnfilledError(abstract_path, file=file, line=tok_line, column=tok_col, reason="abstract_inherited", ancestors_searched=searched)
                     ann = annotations.get(abstract_path)
                     declared_type = getattr(ann, "type", "string") if ann is not None else "string"
-                    if declared_type == "list":
-                        raise _abstract_type_mismatch(
-                            abstract_path, file=file, line=tok_line, column=tok_col,
-                            declared="list", actual=value, ancestors_searched=searched,
-                        )
                     resolved = _interp(
                         value,
                         namespace,
@@ -503,6 +498,29 @@ def _interp(
                         resources=resources,
                         annotations=annotations,
                     )
+                    if declared_type == "list":
+                        if not isinstance(resolved, list):
+                            raise _abstract_type_mismatch(
+                                abstract_path, file=file, line=tok_line, column=tok_col,
+                                declared="list", actual=resolved, ancestors_searched=searched,
+                            )
+                        alone, indent = _alone_on_line(text, offset, len(val) + 3)
+                        if alone and _is_list_of_scalars(resolved):
+                            parts_out.append(_render_bullets(resolved, indent))
+                            continue
+                        if not _is_list_of_scalars(resolved):
+                            raise MergeError(
+                                path=abstract_path,
+                                conflict="non_scalar_in_textual",
+                                types=[type(resolved).__name__],
+                                nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
+                            )
+                        raise MergeError(
+                            path=abstract_path,
+                            conflict="list_inline_in_textual",
+                            types=[type(resolved).__name__],
+                            nodes=[{"file": file, "line": tok_line, "column": tok_col, "ancestor": root_file}],
+                        )
                     if not _is_scalar(resolved):
                         raise MergeError(
                             path=abstract_path,
@@ -564,6 +582,7 @@ class AbstractRef:
     line: int | None
     column: int | None
     is_textual: bool = False
+    is_alone_on_line: bool = False
 
 
 def _iter_abstract_in_scalar(
@@ -589,8 +608,10 @@ def _iter_abstract_in_scalar(
         body = _abstract_body(val)
         if body is not None:
             tok_line, tok_col = _position_for_offset(text, offset, meta_line, meta_col)
+            alone, _indent = _alone_on_line(text, offset, len(val) + 3)
             out.append(AbstractRef(
-                path=body, file=src, line=tok_line, column=tok_col, is_textual=True,
+                path=body, file=src, line=tok_line, column=tok_col,
+                is_textual=True, is_alone_on_line=alone,
             ))
     return out
 

@@ -439,11 +439,11 @@ def _check_local_abstract_annotations(
             )
         if ann.type == "list":
             for r in path_refs:
-                if getattr(r, "is_textual", False):
+                if getattr(r, "is_textual", False) and not getattr(r, "is_alone_on_line", False):
                     raise SchemaError(
                         f"${{abstract:{path}}} is annotated as type 'list' but appears "
-                        f"in textual position (inside a larger string scalar); "
-                        f"list-shaped abstracts must occupy a structural position",
+                        f"inline in a larger string scalar; list-shaped abstracts must "
+                        f"occupy a structural position or be alone on their line",
                         file=file,
                         line=r.line,
                         column=r.column,
