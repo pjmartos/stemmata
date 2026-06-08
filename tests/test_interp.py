@@ -320,6 +320,59 @@ def test_abstract_non_scalar_in_textual_raises_merge():
         )
 
 
+def _interp_with_annotations(text, layers_data, annotations, file="x.yaml"):
+    data = _load(text, file=file)
+    merged = data
+    for layer in layers_data:
+        from stemmata.merge import merge_pair
+        merged = merge_pair(merged, layer)
+    layers = [Layer(canonical_id=f"layer{i}", data=l) for i, l in enumerate([data] + layers_data)]
+    return interpolate(merged, layers, root_file=file, annotations=annotations)
+
+
+class _Ann:
+    def __init__(self, type_):
+        self.type = type_
+
+
+def test_list_abstract_alone_on_line_renders_bullets():
+    result = _interp_with_annotations(
+        "body: |\n  Header\n  ${abstract:items}\n",
+        [{"items": ["one", "two"]}],
+        {"items": _Ann("list")},
+    )
+    assert result["body"] == "Header\n- one\n- two\n"
+
+
+def test_list_abstract_alone_on_line_indented_renders_indented_bullets():
+    result = _interp_with_annotations(
+        "body: |\n  Intro:\n    ${abstract:items}\n",
+        [{"items": ["a", "b"]}],
+        {"items": _Ann("list")},
+    )
+    assert result["body"] == "Intro:\n  - a\n  - b\n"
+
+
+def test_list_abstract_inline_in_textual_raises_merge():
+    with pytest.raises(MergeError) as exc:
+        _interp_with_annotations(
+            "body: |\n  Items: ${abstract:items}\n",
+            [{"items": ["a", "b"]}],
+            {"items": _Ann("list")},
+        )
+    assert exc.value.details["conflict"] == "list_inline_in_textual"
+
+
+def test_list_abstract_alone_on_line_but_value_not_a_list_raises_type_mismatch():
+    with pytest.raises(AbstractUnfilledError) as exc:
+        _interp_with_annotations(
+            "body: |\n  ${abstract:items}\n",
+            [{"items": "not a list"}],
+            {"items": _Ann("list")},
+        )
+    assert exc.value.details["reason"] == "type_mismatch"
+
+
 def test_abstract_empty_body_in_flow_raises():
     with pytest.raises(UnresolvableError):
         _interp("x: ${abstract:}\n", [])
