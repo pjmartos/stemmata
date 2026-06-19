@@ -16,6 +16,7 @@ EXIT_ABSTRACT_UNFILLED = 16
 EXIT_NETWORK = 20
 EXIT_CACHE = 21
 EXIT_OFFLINE = 22
+EXIT_CONFIG = 23
 
 
 CATEGORIES = {
@@ -30,6 +31,7 @@ CATEGORIES = {
     EXIT_NETWORK: "network_error",
     EXIT_CACHE: "cache_error",
     EXIT_OFFLINE: "offline_violation",
+    EXIT_CONFIG: "config_error",
 }
 
 
@@ -192,6 +194,14 @@ class OfflineError(PromptCliError):
             None,
             {"url": url},
         )
+
+
+class ConfigError(PromptCliError):
+    def __init__(self, message: str, *, path: str | None = None, reason: str = ""):
+        details: dict[str, Any] = {"reason": reason}
+        if path is not None:
+            details["path"] = path
+        super().__init__(EXIT_CONFIG, message, None, details)
 
 
 class GenericError(PromptCliError):

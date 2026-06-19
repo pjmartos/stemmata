@@ -88,7 +88,7 @@ stemmata [GLOBAL FLAGS] <subcommand> [ARGS]
 | `--offline`                 | off                        | Forbid network access; exit `22` if a fetch would be needed.                                 |
 | `--refresh`                 | off                        | Re-fetch artifacts even if cached.                                                           |
 | `--cache-dir <path>`        | `~/.cache/stemmata`        | Override the cache root. Honours `$PROMPT_CLI_CACHE_DIR` when the flag is absent.            |
-| `--npmrc <path>`            | `~/.npmrc`                 | Override the npmrc file used for registry routing and credentials.                           |
+| `--npmrc <path>`            | see *Configuration*        | Override the npmrc file used for registry routing and credentials. Fails (exit `23`) if the given path does not exist. |
 | `--version`                 | —                          | Print version and exit.                                                                      |
 
 ### `resolve <target>`
@@ -302,12 +302,17 @@ For the full interpolation reference (structural vs. textual placeholders, list 
 | `20` | Network / registry error                                      |
 | `21` | Cache error                                                   |
 | `22` | Offline-mode violation                                        |
+| `23` | npmrc config file not found (explicit `--npmrc` path missing)  |
 
 On failure, stdout always carries a JSON error envelope with `{status, exit_code, command, error: {code, category, message, ...}}` regardless of `--output`. Stderr gets a single-line human summary.
 
 ## Configuration
 
-Registry routing and credentials come from `~/.npmrc` for both fetch and publish.
+Registry routing and credentials come from an npmrc file for both fetch and publish. The file is located via a three-tier precedence:
+
+1. **`--npmrc <path>`** — if given, it is authoritative. The command fails with exit `23` when the path does not exist.
+2. **`NPM_CONFIG_USERCONFIG`** — honoured leniently for CI/CD: `~` is expanded, and (following npm) an empty value means "no userconfig". If it names an existing file it wins; if it is set but missing, stemmata silently falls through to the next tier.
+3. **`~/.npmrc`** — the final fallback. If absent, stemmata proceeds with an empty configuration.
 
 ## Testing
 
