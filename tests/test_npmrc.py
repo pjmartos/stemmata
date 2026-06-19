@@ -147,10 +147,11 @@ def test_userconfig_env_empty_string_treated_as_unset(tmp_path, monkeypatch):
 
 
 def test_userconfig_env_tilde_expansion(tmp_path, monkeypatch):
+    # '~' must expand via Path.home() so it is correct on every OS
+    # (USERPROFILE on Windows, HOME/pwd on POSIX), not via os.path.expanduser.
     home = tmp_path / "home"
     home.mkdir()
     (home / "custom.npmrc").write_text("registry=https://tilde/\n")
-    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr("pathlib.Path.home", lambda: home)
     cfg = load_npmrc(None, env={"NPM_CONFIG_USERCONFIG": "~/custom.npmrc"})
     assert cfg.default_registry() == "https://tilde/"

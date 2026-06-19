@@ -144,6 +144,22 @@ def _canonicalize_prefix(prefix: str) -> str:
     return f"//{host.lower()}{path}"
 
 
+def _expand_user(raw: str) -> Path:
+    """Expand a leading ``~`` against :func:`Path.home`.
+
+    Unlike :func:`os.path.expanduser` (and :meth:`Path.expanduser`, which
+    delegates to it), this routes the common ``~`` / ``~/`` forms through
+    ``Path.home()`` so expansion is correct on every OS — ``USERPROFILE`` on
+    Windows, ``HOME``/pwd on POSIX — and overridable in tests. ``~user`` forms
+    fall back to ``os.path.expanduser``.
+    """
+    if raw == "~":
+        return Path.home()
+    if raw[:2] in ("~/", "~\\"):
+        return Path.home() / raw[2:]
+    return Path(os.path.expanduser(raw))
+
+
 def _resolve_npmrc_path(explicit: Path | None, env: dict[str, str]) -> Path | None:
     """Resolve which npmrc file to load via a three-tier precedence.
 
@@ -159,7 +175,7 @@ def _resolve_npmrc_path(explicit: Path | None, env: dict[str, str]) -> Path | No
     yields an empty config (preserving the prior no-npmrc behaviour).
     """
     if explicit is not None:
-        explicit = Path(os.path.expanduser(str(explicit)))
+        explicit = _expand_user(str(explicit))
         if not explicit.exists():
             raise ConfigError(
                 f"npmrc config file not found: {explicit}",
@@ -170,7 +186,7 @@ def _resolve_npmrc_path(explicit: Path | None, env: dict[str, str]) -> Path | No
 
     raw = env.get("NPM_CONFIG_USERCONFIG")
     if raw is not None and raw.strip() != "":
-        candidate = Path(os.path.expanduser(raw))
+        candidate = _expand_user(raw)
         if candidate.exists():
             return candidate
         # Set but missing: lenient skip to the ~/.npmrc fallback.
