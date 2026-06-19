@@ -1,7 +1,7 @@
 import pytest
 
-from stemmata.errors import SchemaError
-from stemmata.npmrc import NpmConfig, parse_npmrc, _canonicalize_url
+from stemmata.errors import EXIT_CONFIG, ConfigError, SchemaError
+from stemmata.npmrc import NpmConfig, load_npmrc, parse_npmrc, _canonicalize_url
 
 
 def test_basic_key_value():
@@ -100,3 +100,72 @@ def test_crlf_tolerated():
 def test_bom_tolerated():
     entries = parse_npmrc("\ufeffregistry=https://x/\n", env={})
     assert entries["registry"] == "https://x/"
+
+
+# --- file resolution precedence (issue #17) -------------------------------
+
+
+def test_explicit_path_loaded(tmp_path):
+    f = tmp_path / "explicit.npmrc"
+    f.write_text("registry=https://explicit/\n")
+    cfg = load_npmrc(f, env={})
+    assert cfg.default_registry() == "https://explicit/"
+
+
+def test_explicit_missing_path_raises_config_error(tmp_path):
+    missing = tmp_path / "nope.npmrc"
+    with pytest.raises(ConfigError) as exc:
+        load_npmrc(missing, env={})
+    assert exc.value.code == EXIT_CONFIG
+    assert str(missing) in exc.value.message
+
+
+def test_userconfig_env_used_when_file_exists(tmp_path):
+    f = tmp_path / "ci.npmrc"
+    f.write_text("registry=https://ci/\n")
+    cfg = load_npmrc(None, env={"NPM_CONFIG_USERCONFIG": str(f)})
+    assert cfg.default_registry() == "https://ci/"
+
+
+def test_userconfig_env_missing_file_skips_to_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".npmrc").write_text("registry=https://home/\n")
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    cfg = load_npmrc(None, env={"NPM_CONFIG_USERCONFIG": str(tmp_path / "ghost.npmrc")})
+    assert cfg.default_registry() == "https://home/"
+
+
+def test_userconfig_env_empty_string_treated_as_unset(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".npmrc").write_text("registry=https://home/\n")
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    for blank in ("", "   "):
+        cfg = load_npmrc(None, env={"NPM_CONFIG_USERCONFIG": blank})
+        assert cfg.default_registry() == "https://home/"
+
+
+def test_userconfig_env_tilde_expansion(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "custom.npmrc").write_text("registry=https://tilde/\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    cfg = load_npmrc(None, env={"NPM_CONFIG_USERCONFIG": "~/custom.npmrc"})
+    assert cfg.default_registry() == "https://tilde/"
+
+
+def test_explicit_path_wins_over_env(tmp_path):
+    explicit = tmp_path / "explicit.npmrc"
+    explicit.write_text("registry=https://explicit/\n")
+    env_file = tmp_path / "env.npmrc"
+    env_file.write_text("registry=https://env/\n")
+    cfg = load_npmrc(explicit, env={"NPM_CONFIG_USERCONFIG": str(env_file)})
+    assert cfg.default_registry() == "https://explicit/"
+
+
+def test_no_sources_yields_empty_config(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "empty-home")
+    cfg = load_npmrc(None, env={})
+    assert cfg.entries == {}

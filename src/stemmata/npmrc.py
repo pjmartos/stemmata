@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlsplit
 
-from stemmata.errors import SchemaError
+from stemmata.errors import ConfigError, SchemaError
 
 
 _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -144,11 +144,46 @@ def _canonicalize_prefix(prefix: str) -> str:
     return f"//{host.lower()}{path}"
 
 
+def _resolve_npmrc_path(explicit: Path | None, env: dict[str, str]) -> Path | None:
+    """Resolve which npmrc file to load via a three-tier precedence.
+
+    1. An explicit ``--npmrc`` path is authoritative: if it does not point to an
+       existing file the command hard-fails (``ConfigError``).
+    2. ``NPM_CONFIG_USERCONFIG`` is honoured leniently for CI/CD: ``~`` is
+       expanded and, following npm, an empty/whitespace value means "no
+       userconfig" (treated as unset). If it names a real file it wins; if it is
+       set but missing we skip to the final fallback rather than failing.
+    3. ``~/.npmrc`` is the final fallback.
+
+    Returns ``None`` when no file exists at the resolved fallback, so the caller
+    yields an empty config (preserving the prior no-npmrc behaviour).
+    """
+    if explicit is not None:
+        explicit = Path(os.path.expanduser(str(explicit)))
+        if not explicit.exists():
+            raise ConfigError(
+                f"npmrc config file not found: {explicit}",
+                path=str(explicit),
+                reason="explicit_not_found",
+            )
+        return explicit
+
+    raw = env.get("NPM_CONFIG_USERCONFIG")
+    if raw is not None and raw.strip() != "":
+        candidate = Path(os.path.expanduser(raw))
+        if candidate.exists():
+            return candidate
+        # Set but missing: lenient skip to the ~/.npmrc fallback.
+
+    fallback = Path.home() / ".npmrc"
+    return fallback if fallback.exists() else None
+
+
 def load_npmrc(path: Path | None = None, env: dict[str, str] | None = None) -> NpmConfig:
-    if path is None:
-        path = Path.home() / ".npmrc"
-    if not path.exists():
+    resolved_env = env if env is not None else dict(os.environ)
+    resolved = _resolve_npmrc_path(path, resolved_env)
+    if resolved is None:
         return NpmConfig(entries={})
-    text = path.read_text(encoding="utf-8")
-    entries = parse_npmrc(text, env=env, file=str(path))
+    text = resolved.read_text(encoding="utf-8")
+    entries = parse_npmrc(text, env=resolved_env, file=str(resolved))
     return NpmConfig(entries=entries)

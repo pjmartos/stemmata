@@ -12,6 +12,7 @@ from stemmata.cli import run
 from stemmata.errors import (
     EXIT_ABSTRACT_UNFILLED,
     EXIT_CACHE,
+    EXIT_CONFIG,
     EXIT_CYCLE,
     EXIT_GENERIC,
     EXIT_MERGE,
@@ -137,6 +138,21 @@ def test_resolve_missing_target_usage_error(tmp_path):
     cap = _Capture()
     code = run(["resolve"], stdout=cap.out, stderr=cap.err)
     assert code == EXIT_USAGE
+
+
+def test_explicit_npmrc_missing_fails_with_config_error(tmp_path):
+    child = tmp_path / "child.yaml"
+    child.write_text("foo: bar\n")
+    missing = tmp_path / "nope.npmrc"
+    cap = _Capture()
+    code = run(
+        ["--output", "json", "--npmrc", str(missing), "--cache-dir", str(tmp_path / "cache"), "resolve", str(child)],
+        stdout=cap.out,
+        stderr=cap.err,
+    )
+    assert code == EXIT_CONFIG
+    env = json.loads(cap.out.getvalue())
+    assert env["error"]["category"] == "config_error"
 
 
 def test_resolve_schema_error_rejects_python_tag(tmp_path):
