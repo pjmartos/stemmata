@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import re
 import signal
 import sys
@@ -73,6 +74,27 @@ def _check_python_version() -> None:
             f"stemmata requires Python 3.12+, found {sys.version_info.major}.{sys.version_info.minor}\n"
         )
         sys.exit(EXIT_GENERIC)
+
+
+def _inject_system_trust_store() -> None:
+    """Trust the OS certificate store for HTTPS.
+
+    ``truststore.inject_into_ssl()`` patches ``ssl.SSLContext`` globally, so
+    every HTTPS call site (registry fetch/publish and ``$schema`` retrieval)
+    honours OS-managed/corporate root CAs without a manually maintained CA
+    bundle — matching the behaviour users expect from npm, curl and browsers.
+    Set ``STEMMATA_SYSTEM_CA=0`` to opt out and fall back to Python's default
+    trust roots. Injection failures are swallowed so HTTPS keeps working with
+    the default bundle.
+    """
+    if os.environ.get("STEMMATA_SYSTEM_CA") == "0":
+        return
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception:
+        pass
 
 
 class _StemmataArgumentParser(argparse.ArgumentParser):
@@ -1004,6 +1026,7 @@ def _run_cache_clear(args: argparse.Namespace, stdout, stderr) -> int:
 
 def run(argv: list[str] | None = None, *, stdout=None, stderr=None) -> int:
     _check_python_version()
+    _inject_system_trust_store()
     stdout = stdout if stdout is not None else sys.stdout
     stderr = stderr if stderr is not None else sys.stderr
     parser = _build_parser()

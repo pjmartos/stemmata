@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Text Processing :: Markup",
 ]
-dependencies = ["PyYAML==6.0.3", "jsonschema==4.26.0"]
+dependencies = ["PyYAML==6.0.3", "jsonschema==4.26.0", "truststore==0.10.4"]
 
 [project.urls]
 Homepage = "https://github.com/pjmartos/stemmata"

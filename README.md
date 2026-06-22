@@ -314,6 +314,10 @@ Registry routing and credentials come from an npmrc file for both fetch and publ
 2. **`NPM_CONFIG_USERCONFIG`** — honoured leniently for CI/CD: `~` is expanded, and (following npm) an empty value means "no userconfig". If it names an existing file it wins; if it is set but missing, stemmata silently falls through to the next tier.
 3. **`~/.npmrc`** — the final fallback. If absent, stemmata proceeds with an empty configuration.
 
+### TLS trust store
+
+HTTPS connections trust the operating system certificate store by default, so registries behind a TLS-intercepting proxy or with certificates chaining to a corporate/self-signed root CA work out of the box — just like npm, curl and browsers. No CA file paths or environment variables are required for the common case. Set `STEMMATA_SYSTEM_CA=0` to opt out and fall back to Python's bundled trust roots.
+
 ## Testing
 
 ```
